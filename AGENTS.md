@@ -56,37 +56,41 @@ Runtime behavior:
 
 - `subagent` starts one ephemeral worker in a Herdr-managed pane.
 - The worker runs `pi --no-session` with the selected role prompt and role tool restrictions.
-- The main agent remains the broker: it starts the worker, sends the task, waits for completion, parses the result, then decides the next workflow step.
+- The main agent remains the broker: it starts the worker, sends the task, waits for the worker's `agent_status` (reported by the Herdr pi integration) to reach a terminal state (`done` / `idle`), parses the result, then decides the next workflow step.
+- Completion detection is **event-driven via `agent_status`**, not via text scraping. Workers no longer need to emit a sentinel token — they just finish their turn cleanly.
+- Workers must still emit a final JSON object describing the outcome (see "Subagent JSON envelope" in each role prompt). Their Markdown report goes inside that object's `output` field.
 - Successful worker panes close automatically.
-- Failed, timed-out, or malformed-protocol worker panes stay open for debugging.
+- Failed, timed-out, or `blocked` worker panes stay open for debugging.
 - Project-local agent confirmation remains required when configured.
-- Worker final output is returned through the tool's required JSON protocol; role-specific Markdown reports should be placed in the JSON `output` field.
 
-### Subagent Protocol Failure Recovery
+### Commit Authority
 
-A failed `subagent` tool call does **not** automatically mean the delegated task failed. It may only mean the worker did not finish with the required JSON + `<<<SUBAGENT_DONE>>>` protocol.
+**The submitter agent is the only role that creates git commits, pushes, or opens PRs.**
 
-If a `subagent` call fails because of a malformed, missing, or delayed final protocol:
+- Developer / fixer / tester leave changes in the working tree (staged or unstaged). They do not run `git commit`, `git push`, or `git tag`.
+- The submitter receives the working-tree state, commits it on the feature branch, pushes, and opens the PR.
+- This keeps the merge boundary explicit: one commit per task, one PR per task, attribution clear.
 
-1. **Do not immediately spawn a replacement agent.** This can duplicate work and violates the spirit of the single-agent lock.
-2. Read the kept-open worker pane with `herdr read`.
-3. Check whether the task already ran and whether files were changed.
-4. If the worker is still usable and the task did not start or did not finish cleanly, continue in the **same pane** with `herdr run` using an explicit instruction to execute the task and finish with the required protocol.
-5. Wait for `<<<SUBAGENT_DONE>>>` with `herdr watch`.
-6. Verify changed files directly before deciding the next workflow step.
-7. Only spawn a new subagent if the existing worker pane is unusable, blocked, or clearly abandoned.
+### Subagent Failure Recovery
 
-Recovery prompt to use when continuing an open worker pane:
+A failed `subagent` tool call can mean one of three things — handle each differently rather than blindly retrying:
 
-```text
-Bitte führe die delegierte Aufgabe jetzt aktiv aus. Antworte am Ende ausschließlich mit einem JSON-Objekt, direkt gefolgt von einer neuen Zeile mit <<<SUBAGENT_DONE>>>. Kein Markdown, kein weiterer Text.
-```
+1. **`agent_status` never reached `done`/`idle` (timeout, 20 min default).**
+   The worker is still alive in its pane. Do NOT spawn a replacement. Instead:
+   - `herdr agent read <runName>` to see what it did.
+   - `herdr agent attach <runName>` to inspect interactively, or `herdr pane run <paneRef> "..."` to nudge it.
+   - If the work is actually complete, the missing signal is a Herdr pi-integration issue (run `herdr integration status` and verify `pi: current`).
+   - If the work is incomplete, decide whether to nudge it forward or close the pane and start fresh.
 
-When composing any `subagent` task, include an explicit final-protocol reminder:
+2. **`agent_status` reached `blocked`.**
+   The worker is waiting for user input the tool cannot provide. Read the pane to see what it asked, then either:
+   - send a reply via `herdr pane run <paneRef> "<answer>"` and let the worker finish, or
+   - close the pane and re-spawn with a clearer task that doesn't trigger the prompt.
 
-```text
-Wichtig: Führe die Aufgabe jetzt aktiv aus. Antworte am Ende ausschließlich mit einem JSON-Objekt, direkt gefolgt von einer neuen Zeile mit <<<SUBAGENT_DONE>>>. Kein Markdown, kein weiterer Text.
-```
+3. **Worker emitted `status: "error"` in its final JSON.**
+   The worker considers the task failed for a real reason. Read the `error` and `output` fields in the result. Do NOT auto-retry — surface it to the user or decide on a remediation (different agent, smaller scope, etc.).
+
+The legacy `<<<SUBAGENT_DONE>>>` token is now optional and exists only for human-readable pane scrubbing. Do not include "final-protocol reminders" in task strings — the role system prompt already specifies the JSON envelope.
 
 ---
 

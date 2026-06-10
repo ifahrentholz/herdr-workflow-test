@@ -73,6 +73,59 @@ export function getHerdrRuntimeError(error: unknown): string {
 	return `Herdr runtime is required for subagent execution. Start/attach Herdr first. (${error instanceof Error ? error.message : String(error)})`;
 }
 
+export type PiIntegrationState = "current" | "outdated" | "not-installed" | "unknown";
+
+export interface PiIntegrationStatus {
+	state: PiIntegrationState;
+	rawLine: string;
+}
+
+/**
+ * Parse the output of `herdr integration status` for the `pi:` line.
+ *
+ * The integration is what sets `agent_status` on the worker pane. Without it,
+ * waitForCompletion has no signal to fire on and will run the full timeout —
+ * so we fail fast at spawn time with an actionable message.
+ *
+ * Expected line shapes (from herdr 0.6.x):
+ *   "pi: current (v2) (/path/to/extension)"
+ *   "pi: outdated (v1, latest v2) (/path)"
+ *   "pi: not installed (/path)"
+ */
+export function parsePiIntegrationStatus(stdout: string): PiIntegrationStatus {
+	for (const rawLine of stdout.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line.startsWith("pi:")) continue;
+		const body = line.slice(3).trim().toLowerCase();
+		if (body.startsWith("current")) return { state: "current", rawLine: line };
+		if (body.startsWith("outdated")) return { state: "outdated", rawLine: line };
+		if (body.startsWith("not installed") || body.startsWith("not-installed")) {
+			return { state: "not-installed", rawLine: line };
+		}
+		return { state: "unknown", rawLine: line };
+	}
+	return { state: "unknown", rawLine: "" };
+}
+
+export function getPiIntegrationRequirementError(status: PiIntegrationStatus): string {
+	if (status.state === "not-installed") {
+		return [
+			"Herdr pi integration is not installed.",
+			"The subagent tool relies on it to report worker agent_status; without it, every run will time out.",
+			"Install with: herdr integration install pi",
+		].join(" ");
+	}
+	if (status.state === "outdated") {
+		return [
+			"Herdr pi integration is outdated.",
+			"agent_status reporting may be unreliable on older versions.",
+			"Update with: herdr integration install pi",
+			`(detected: ${status.rawLine})`,
+		].join(" ");
+	}
+	return `Herdr pi integration check returned an unrecognized status: ${status.rawLine || "no pi line found in output"}`;
+}
+
 function getStringAt(value: unknown, path: string[]): string | null {
 	let current: unknown = value;
 	for (const key of path) {
@@ -96,7 +149,16 @@ function parsePaneRefFromJsonLine(line: string): string | null {
 	}
 }
 
-export function extractPaneRef(startOutput: string, fallback: string): string {
+/**
+ * Extract a Herdr pane id from `herdr agent start` JSON output.
+ *
+ * Only returns a value when we can positively identify a `pane_id` field in
+ * the response (JSON-line shape or raw `"pane_id":"..."` substring). Earlier
+ * versions fell back to "first non-empty line" / arbitrary UUID matches,
+ * which silently produced bogus pane refs whenever the response format
+ * shifted — every subsequent `pane get`/`pane close` then failed silently.
+ */
+export function extractPaneRef(startOutput: string): string | null {
 	const trimmed = startOutput.trim();
 	for (const line of trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
 		const paneRef = parsePaneRefFromJsonLine(line);
@@ -104,12 +166,7 @@ export function extractPaneRef(startOutput: string, fallback: string): string {
 	}
 	const paneId = trimmed.match(/"pane_id"\s*:\s*"([^"]+)"/)?.[1];
 	if (paneId) return paneId;
-	const uuid = trimmed.match(/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}/)?.[0];
-	if (uuid) return uuid;
-	const terminalId = trimmed.match(/(?:pane|terminal|id)[:=]\s*([A-Za-z0-9_.:-]+)/i)?.[1];
-	if (terminalId) return terminalId;
-	const firstLine = trimmed.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
-	return firstLine ?? fallback;
+	return null;
 }
 
 function parseWorkspaceIdFromJsonLine(line: string): string | null {

@@ -40,3 +40,18 @@ Numbered, small, actionable steps:
 Watch-outs, external deps, or assumptions.
 
 Keep the plan concrete enough for a developer agent to execute verbatim.
+
+**Subagent JSON envelope (mandatory):**
+
+Your final non-empty message MUST be one JSON object matching this schema, with the Markdown plan above placed inside the `output` field:
+
+```json
+{
+  "status": "success",
+  "summary": "<one-line goal of the plan>",
+  "output": "<the full Markdown plan above, as a single string>",
+  "notes": "<assumptions or open questions for the orchestrator>"
+}
+```
+
+On failure (e.g. PRD is incomplete and you cannot plan), use `"status": "error"` with `"error"` set. Do NOT wrap the JSON in a code fence.

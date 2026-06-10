@@ -8,7 +8,9 @@ import {
 	extractPaneRef,
 	extractWorkspaceId,
 	getHerdrRuntimeError,
+	getPiIntegrationRequirementError,
 	makePiCommand,
+	parsePiIntegrationStatus,
 	shellQuote,
 } from "./lifecycle.ts";
 
@@ -102,7 +104,7 @@ test("extractPaneRef parses Herdr agent start JSON output", () => {
 		},
 	});
 
-	assert.equal(extractPaneRef(output, "developer-abc123"), "w653e52a6f42d22-3");
+	assert.equal(extractPaneRef(output), "w653e52a6f42d22-3");
 });
 
 test("extractPaneRef parses Herdr agent start JSON with a top-level agent shape", () => {
@@ -112,7 +114,13 @@ test("extractPaneRef parses Herdr agent start JSON with a top-level agent shape"
 		},
 	});
 
-	assert.equal(extractPaneRef(output, "developer-abc123"), "w653e52a6f42d22-4");
+	assert.equal(extractPaneRef(output), "w653e52a6f42d22-4");
+});
+
+test("extractPaneRef returns null when no pane_id is present (no silent fallback)", () => {
+	assert.equal(extractPaneRef(""), null);
+	assert.equal(extractPaneRef("some unexpected log line"), null);
+	assert.equal(extractPaneRef(JSON.stringify({ result: { agent: { name: "x" } } })), null);
 });
 
 test("extractWorkspaceId returns the workspace id from agent start JSON", () => {
@@ -131,4 +139,36 @@ test("extractWorkspaceId returns the workspace id from agent start JSON", () => 
 test("runtime guard error is explicit about Herdr requirement", () => {
 	assert.match(getHerdrRuntimeError(new Error("socket missing")), /Herdr runtime is required/);
 	assert.match(getHerdrRuntimeError(new Error("socket missing")), /socket missing/);
+});
+
+test("parsePiIntegrationStatus recognises current/outdated/not-installed states", () => {
+	const installed = parsePiIntegrationStatus([
+		"claude: current (v5) (/Users/x/.claude/hooks/herdr-agent-state.sh)",
+		"pi: current (v2) (/Users/x/.pi/agent/extensions/herdr-agent-state.ts)",
+	].join("\n"));
+	assert.equal(installed.state, "current");
+
+	const missing = parsePiIntegrationStatus([
+		"pi: not installed (/Users/x/.pi/agent/extensions/herdr-agent-state.ts)",
+	].join("\n"));
+	assert.equal(missing.state, "not-installed");
+
+	const outdated = parsePiIntegrationStatus([
+		"pi: outdated (v1, latest v2) (/Users/x/.pi/agent/extensions/herdr-agent-state.ts)",
+	].join("\n"));
+	assert.equal(outdated.state, "outdated");
+
+	const noPiLine = parsePiIntegrationStatus("claude: current (v5)\nomp: not installed");
+	assert.equal(noPiLine.state, "unknown");
+});
+
+test("pi integration requirement error is actionable", () => {
+	assert.match(
+		getPiIntegrationRequirementError({ state: "not-installed", rawLine: "pi: not installed (/p)" }),
+		/herdr integration install pi/,
+	);
+	assert.match(
+		getPiIntegrationRequirementError({ state: "outdated", rawLine: "pi: outdated (v1)" }),
+		/outdated/,
+	);
 });

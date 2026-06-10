@@ -33,6 +33,8 @@ import {
 	extractPaneRef,
 	extractWorkspaceId,
 	getHerdrRuntimeError,
+	getPiIntegrationRequirementError,
+	parsePiIntegrationStatus,
 	type SplitDirection,
 } from "./lifecycle.ts";
 import {
@@ -96,6 +98,25 @@ async function assertHerdrRuntime(cwd: string): Promise<void> {
 	} catch (error) {
 		throw new Error(getHerdrRuntimeError(error));
 	}
+
+	let integrationStdout: string;
+	try {
+		const { stdout } = await runHerdr(["integration", "status"], { cwd, timeout: 10_000 });
+		integrationStdout = stdout;
+	} catch (error) {
+		// `integration status` failure is non-fatal — we still try to run, and
+		// surface a hint instead of blocking the user entirely.
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Could not query \`herdr integration status\` to verify the pi integration. ${message}`);
+	}
+
+	const integrationStatus = parsePiIntegrationStatus(integrationStdout);
+	if (integrationStatus.state === "not-installed" || integrationStatus.state === "unknown") {
+		throw new Error(getPiIntegrationRequirementError(integrationStatus));
+	}
+	// `outdated` is intentionally allowed through with no warning here — the
+	// agent_status wait will surface a real timeout if the older version can't
+	// report state. Future work: pipe a warning into onUpdate.
 }
 
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
@@ -125,8 +146,12 @@ function cleanupTemp(dir: string | null, filePath: string | null) {
 	}
 }
 
-function makeDetails(base: Omit<SubagentDetails, "state" | "startedAt">, state: SubagentLifecycleState): SubagentDetails {
-	return { ...base, state, startedAt: Date.now() };
+function makeDetails(
+	base: Omit<SubagentDetails, "state" | "startedAt">,
+	state: SubagentLifecycleState,
+	startedAt: number,
+): SubagentDetails {
+	return { ...base, state, startedAt };
 }
 
 async function readWorkerOutput(target: string, paneRef: string): Promise<string> {
@@ -143,8 +168,14 @@ async function closeWorkerPane(paneRef: string): Promise<"closed" | "kept-open">
 	try {
 		await runHerdr(buildPaneCloseArgs(paneRef));
 		return "closed";
-	} catch {
-		return "kept-open";
+	} catch (error) {
+		// Treat "pane no longer exists" the same as a successful close — the
+		// goal (no lingering worker pane) is met either way. Other errors
+		// (socket down, permission denied, etc.) mean the pane is still alive
+		// somewhere and should be flagged kept-open for the user to inspect.
+		const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+		const alreadyGone = /not[ _-]found|does[ _-]not[ _-]exist|no such|unknown pane|already closed/.test(message);
+		return alreadyGone ? "closed" : "kept-open";
 	}
 }
 
@@ -240,9 +271,10 @@ async function runHerdrAgent(options: {
 
 	const cwd = options.cwd ?? options.defaultCwd;
 	const runName = makeRunName(options.agent.name, randomUUID());
+	const startedAt = Date.now();
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
-	let paneRef = runName;
+	let paneRef: string | null = null;
 	let lastOutput = "";
 
 	const detailsBase: Omit<SubagentDetails, "state" | "startedAt"> = {
@@ -251,13 +283,18 @@ async function runHerdrAgent(options: {
 		agentScope: options.agentScope,
 		projectAgentsDir: options.projectAgentsDir,
 		runName,
-		paneRef,
+		paneRef: undefined,
 	};
 
 	const emit = (state: SubagentLifecycleState, text: string, extra: Partial<SubagentDetails> = {}) => {
 		options.onUpdate?.({
 			content: [{ type: "text", text }],
-			details: { ...makeDetails(detailsBase, state), paneRef, lastOutput, ...extra },
+			details: {
+				...makeDetails(detailsBase, state, startedAt),
+				paneRef: paneRef ?? undefined,
+				lastOutput,
+				...extra,
+			},
 		});
 	};
 
@@ -278,7 +315,13 @@ async function runHerdrAgent(options: {
 			buildWorkerStartArgs({ runName, cwd, piArgs, split: splitDirection }),
 			{ cwd },
 		);
-		paneRef = extractPaneRef(start.stdout, runName);
+		const extractedPaneRef = extractPaneRef(start.stdout);
+		if (!extractedPaneRef) {
+			throw new Error(
+				`herdr agent start did not return a pane_id; cannot track worker.\nRaw output:\n${start.stdout.slice(0, 500)}`,
+			);
+		}
+		paneRef = extractedPaneRef;
 		detailsBase.paneRef = paneRef;
 		const workspaceId = extractWorkspaceId(start.stdout);
 		emit(
@@ -302,7 +345,7 @@ async function runHerdrAgent(options: {
 			return {
 				content: [{ type: "text", text: formatSubagentPayload(payload) }],
 				details: {
-					...makeDetails(detailsBase, "failed"),
+					...makeDetails(detailsBase, "failed", startedAt),
 					paneRef,
 					completedAt: Date.now(),
 					payload,
@@ -319,7 +362,7 @@ async function runHerdrAgent(options: {
 		return {
 			content: [{ type: "text", text: formatSubagentPayload(payload) }],
 			details: {
-				...makeDetails(detailsBase, "completed"),
+				...makeDetails(detailsBase, "completed", startedAt),
 				paneRef,
 				completedAt: Date.now(),
 				payload,
@@ -330,9 +373,9 @@ async function runHerdrAgent(options: {
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		const recoveredOutput = await readWorkerOutput(runName, paneRef).catch(() => "");
+		const recoveredOutput = paneRef ? await readWorkerOutput(runName, paneRef).catch(() => "") : "";
 		if (recoveredOutput) lastOutput = recoveredOutput;
-		const recoveredStatus = await getAgentStatus(paneRef);
+		const recoveredStatus = paneRef ? await getAgentStatus(paneRef) : null;
 
 		const fallback: SubagentProtocolPayload = {
 			status: "error",
@@ -343,8 +386,8 @@ async function runHerdrAgent(options: {
 		return {
 			content: [{ type: "text", text: formatSubagentPayload(fallback) }],
 			details: {
-				...makeDetails(detailsBase, "failed"),
-				paneRef,
+				...makeDetails(detailsBase, "failed", startedAt),
+				paneRef: paneRef ?? undefined,
 				completedAt: Date.now(),
 				payload: fallback,
 				agentStatus: recoveredStatus ?? undefined,

@@ -33,3 +33,19 @@ You are a **Submitter agent**. You prepare the code for submission — commits, 
 
 ## Notes
 Anything the team should review.
+
+**Subagent JSON envelope (mandatory):**
+
+Your final non-empty message MUST be one JSON object matching this schema, with the Markdown report above placed inside the `output` field:
+
+```json
+{
+  "status": "success",
+  "summary": "Pushed feature/<name> and opened PR <url-or-pending>",
+  "output": "<the full Markdown report above, as a single string>",
+  "filesChanged": ["paths included in the commit"],
+  "notes": "<PR URL, branch name, anything humans need to act on>"
+}
+```
+
+On failure (e.g. push rejected, PR creation blocked), use `"status": "error"` with `"error"` set to the underlying message. Do NOT wrap the JSON in a code fence.
