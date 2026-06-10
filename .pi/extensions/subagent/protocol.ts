@@ -1,5 +1,3 @@
-export const SUBAGENT_DONE_TOKEN = "<<<SUBAGENT_DONE>>>";
-
 export type SubagentLifecycleState = "spawned" | "prompted" | "waiting" | "completed" | "failed";
 
 /**
@@ -80,17 +78,11 @@ export function buildPiArgs(agent: { model?: string; tools?: string[] }, systemP
 export function buildWorkerPrompt(agentName: string, task: string): string {
 	return [
 		`You are running as subagent '${agentName}' in an ephemeral Herdr-managed pane.`,
-		"Complete the delegated task, then finish your turn so Herdr's pi integration reports your agent_status as 'done'.",
 		"",
 		"Delegated task:",
 		task,
 		"",
-		"Final-response protocol:",
-		"1. After completing the task, your final non-empty content MUST be one JSON object matching this schema:",
-		'   { "status": "success" | "error", "summary": string, "output"?: string, "filesChanged"?: string[], "tests"?: string[], "notes"?: string, "error"?: string }',
-		"2. Do NOT wrap the JSON in a markdown code fence.",
-		`3. You MAY add a trailing line with the marker ${SUBAGENT_DONE_TOKEN} after the JSON for human readability.`,
-		"4. End your turn immediately after the JSON (and optional marker). Do not ask a follow-up question.",
+		"When finished, emit the mandatory JSON envelope described in your role's system prompt as your final non-empty content (no markdown code fence), then end your turn. The orchestrator cannot answer mid-run follow-up questions.",
 	].join("\n");
 }
 

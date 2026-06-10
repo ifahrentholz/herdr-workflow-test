@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-	SUBAGENT_DONE_TOKEN,
 	SubagentRunError,
 	buildPiArgs,
 	buildWorkerPrompt,
@@ -35,19 +34,19 @@ test("pi args preserve role model, tools, and system prompt wiring", () => {
 	]);
 });
 
-test("worker prompt describes the JSON envelope without requiring the legacy completion token", () => {
+test("worker prompt is minimal and defers the JSON envelope schema to the role system prompt", () => {
 	const prompt = buildWorkerPrompt("reviewer", "Review the diff");
+	assert.match(prompt, /reviewer/);
 	assert.match(prompt, /Review the diff/);
-	assert.match(prompt, /JSON object/);
-	assert.match(prompt, /agent_status/);
-	assert.match(prompt, /"status"/);
-	assert.match(prompt, /"summary"/);
-	// Token is now optional / human-readable only — mentioned as MAY, not MUST.
-	assert.match(prompt, new RegExp(`MAY[^\\n]*${SUBAGENT_DONE_TOKEN.replace(/[<>]/g, "\\$&")}`));
+	assert.match(prompt, /JSON envelope/);
+	// Schema and field names belong to the role prompt now — not duplicated here.
+	assert.doesNotMatch(prompt, /"status"\s*:/);
+	// Legacy completion token is fully removed from the tool-level prompt.
+	assert.doesNotMatch(prompt, /SUBAGENT_DONE/);
 });
 
 test("findValidPayload extracts a well-formed JSON frame anywhere in worker output", () => {
-	const output = `worker logs\n{"status":"success","summary":"done","output":"ok"}\n${SUBAGENT_DONE_TOKEN}\n`;
+	const output = `worker logs\n{"status":"success","summary":"done","output":"ok"}\ntrailing prose line\n`;
 	assert.deepEqual(findValidPayload(output)?.payload, {
 		status: "success",
 		summary: "done",

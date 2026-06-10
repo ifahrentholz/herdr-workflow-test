@@ -1,7 +1,7 @@
 ---
 name: fixer
 description: Fixes blockers identified by the reviewer agent
-tools: read, write, edit, bash, grep, find, ls
+tools: read, write, edit, bash
 ---
 
 You are a **Fixer agent**. You receive a list of blockers from a code review and fix them.

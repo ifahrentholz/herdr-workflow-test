@@ -22,7 +22,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
@@ -131,9 +131,7 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
 	const safeName = agentName.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
-	await withFileMutationQueue(filePath, async () => {
-		await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
-	});
+	await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
 	return { dir: tmpDir, filePath };
 }
 
@@ -457,8 +455,9 @@ async function runHerdrAgent(options: {
 }
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
-	default: "user",
+	description:
+		'Which agent directories to discover. Default: "both" — project-local `.pi/agents/*.md` override same-named user agents. Use "user" to ignore project agents entirely.',
+	default: "both",
 });
 
 const SubagentParams = Type.Object({
@@ -488,12 +487,12 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate one task to a specialized Herdr-managed subagent with isolated context.",
 			"Single mode only: provide { agent, task }.",
-			'Default agent scope is "user"; use agentScope "both" or "project" for project-local agents.',
+			'Default agent scope is "both" — project-local `.pi/agents/*.md` shadow same-named user agents.',
 		].join(" "),
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const agentScope: AgentScope = params.agentScope ?? "user";
+			const agentScope: AgentScope = params.agentScope ?? "both";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 
@@ -536,14 +535,35 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
-			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI && agent.source === "project") {
-				const ok = await ctx.ui.confirm(
-					"Run project-local agent?",
-					`Agent: ${agent.name}\nSource: ${discovery.projectAgentsDir ?? agent.filePath}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-				);
-				if (!ok) {
+			const isProjectAgentRun = agentScope !== "user" && agent.source === "project";
+			if (isProjectAgentRun && confirmProjectAgents) {
+				if (ctx.hasUI) {
+					const ok = await ctx.ui.confirm(
+						"Run project-local agent?",
+						`Agent: ${agent.name}\nSource: ${discovery.projectAgentsDir ?? agent.filePath}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+					);
+					if (!ok) {
+						return {
+							content: [{ type: "text", text: "Canceled: project-local agent not approved." }],
+							details: {
+								agent: agent.name,
+								agentSource: agent.source,
+								agentScope,
+								projectAgentsDir: discovery.projectAgentsDir,
+								state: "failed",
+								startedAt: Date.now(),
+								cleanup: "not-started",
+							} satisfies SubagentDetails,
+							isError: true,
+						};
+					}
+				} else if (process.env.PI_SUBAGENT_TRUST_PROJECT_AGENTS !== "1") {
+					const reason = [
+						`Refusing to run project-local agent '${agent.name}' without UI confirmation in headless mode.`,
+						"Either pass confirmProjectAgents: false (explicitly trusting this repo) or set the environment variable PI_SUBAGENT_TRUST_PROJECT_AGENTS=1 in trusted CI environments.",
+					].join(" ");
 					return {
-						content: [{ type: "text", text: "Canceled: project-local agent not approved." }],
+						content: [{ type: "text", text: reason }],
 						details: {
 							agent: agent.name,
 							agentSource: agent.source,
@@ -551,6 +571,7 @@ export default function (pi: ExtensionAPI) {
 							projectAgentsDir: discovery.projectAgentsDir,
 							state: "failed",
 							startedAt: Date.now(),
+							error: reason,
 							cleanup: "not-started",
 						} satisfies SubagentDetails,
 						isError: true,
@@ -572,7 +593,7 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, _context) {
-			const scope: AgentScope = args.agentScope ?? "user";
+			const scope: AgentScope = args.agentScope ?? "both";
 			const agentName = args.agent || "...";
 			const preview = args.task ? (args.task.length > 70 ? `${args.task.slice(0, 70)}...` : args.task) : "...";
 			return new Text(

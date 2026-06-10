@@ -26,17 +26,17 @@ Do NOT wait for further instructions. Do NOT ask "What would you like to do?" �
 
 ## Available Subagents
 
-All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** tool with `agentScope: "both"`.
+All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** tool. `agentScope` defaults to `"both"` — project-local agents shadow same-named user agents automatically; you don't need to pass it explicitly.
 
-| Agent          | Role                                  | Tools                                  |
-| -------------- | ------------------------------------- | -------------------------------------- |
-| `orchestrator` | Coordinates workflow, delegates tasks | read, write, edit, bash                |
-| `planner`      | Creates implementation plans from PRD | read, grep, find, ls                   |
-| `developer`    | Implements features via TDD           | read, write, edit, bash                |
-| `reviewer`     | Code review — finds blockers          | read, grep, find, ls, bash (read-only) |
-| `tester`       | Writes and runs tests                 | read, write, edit, bash                |
-| `fixer`        | Fixes reviewer blockers               | read, write, edit, bash                |
-| `submitter`    | Commits, pushes, creates PRs          | read, bash, grep, find, ls             |
+| Agent          | Role                                  | Tools                |
+| -------------- | ------------------------------------- | -------------------- |
+| `orchestrator` | Coordinates workflow, delegates tasks | read, subagent       |
+| `planner`      | Creates implementation plans from PRD | read, bash           |
+| `developer`    | Implements features via TDD           | read, write, edit, bash |
+| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash |
+| `tester`       | Writes and runs tests                 | read, write, edit, bash |
+| `fixer`        | Fixes reviewer blockers               | read, write, edit, bash |
+| `submitter`    | Commits, pushes, creates PRs          | read, bash           |
 
 ### Invocation Pattern
 
@@ -46,9 +46,14 @@ All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** t
 subagent({
   agent: "<agent-name>",
   task: "<clear task description with context>",
-  agentScope: "both"
 })
 ```
+
+Optional parameters:
+
+- `agentScope: "user" | "project" | "both"` — default `"both"`. Use `"user"` to deliberately bypass project agents.
+- `timeoutMs: number` — default 1 200 000 (20 min); clamped to `[10000, 3600000]`.
+- `confirmProjectAgents: boolean` — default `true`. In headless runs (no UI), project agents require either this flag set to `false` OR the environment variable `PI_SUBAGENT_TRUST_PROJECT_AGENTS=1`.
 
 Do not pass legacy `tasks` or `chain` parameters; they are rejected by the tool.
 
@@ -116,7 +121,6 @@ If the task is complex, delegate planning to the planner agent:
 subagent({
   agent: "planner",
   task: "Create an implementation plan from this PRD: [include PRD content or path]",
-  agentScope: "both"
 })
 ```
 
@@ -158,7 +162,6 @@ Each task follows this exact sequence. **Every task must be committed and merged
 subagent({
   agent: "developer",
   task: "Implement [task description] using TDD on feature/<task-name> branch. PRD context: [summary]",
-  agentScope: "both"
 })
 ```
 
@@ -168,7 +171,6 @@ subagent({
 subagent({
   agent: "reviewer",
   task: "Review changes on feature/<task-name>. Check against PRD: [summary]. Return findings in your final report; if write access is explicitly granted in the role, also persist them to reviews/<timestamp>-review.md",
-  agentScope: "both"
 })
 ```
 
@@ -178,7 +180,6 @@ subagent({
 subagent({
   agent: "fixer",
   task: "Fix these blockers from the review: [include reviewer output]",
-  agentScope: "both"
 })
 ```
 
@@ -195,7 +196,6 @@ subagent({
 subagent({
   agent: "submitter",
   task: "Commit changes, push to feature/<task-name>, and create a PR to main. PRD reference: [summary]",
-  agentScope: "both"
 })
 ```
 

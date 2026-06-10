@@ -6,6 +6,7 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
 **Fortschritt:**
 - Batch 1 abgeschlossen (2026-06-10) — A1, A4, A8, A10, B11, B13, C24, E34, E35. Tests 48/48 grün.
 - Batch 2 abgeschlossen (2026-06-10) — A3, A5, D26, D29. Tests 55/55 grün.
+- Batch 3 abgeschlossen (2026-06-10) — A6, A7, A9, C21, C22, C23, D30, D33. Tests 55/55 grün.
 
 ---
 
@@ -42,20 +43,16 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   eine CLI-Roundtrip statt zwei. Die Split-Entscheidung verwendet jetzt
   den korrekten Pane-Count des aktiven Workspaces.
 
-- [ ] **A6 — Worker-System-Prompt und Tool-Envelope-Prompt widersprechen sich.**
-  z.B. `developer.md` sagt "Output format: ## Completed / ## Files Changed",
-  `buildWorkerPrompt` sagt "final non-empty content MUST be one JSON object".
-  Worker müssen raten. `findValidPayload` ist tolerant, aber sauberer wäre,
-  in den Rollen-Prompts explizit zu sagen: "wrap your Markdown report in the
-  `output:` field of the JSON envelope".
-  Dateien: `.pi/agents/*.md`, `protocol.ts:buildWorkerPrompt`.
+- [x] **A6 — Worker-System-Prompt und Tool-Envelope-Prompt widersprechen sich.** *(erledigt 2026-06-10)*
+  `buildWorkerPrompt` ist jetzt minimal: nennt nur Task + verweist auf das
+  JSON-Envelope-Schema der jeweiligen Rolle. Schema-Duplizierung entfernt;
+  jede Rolle hat seit C24 ihre eigene Pflicht-Envelope-Sektion, die jetzt
+  Single-Source-of-Truth ist.
 
-- [ ] **A7 — `agentScope`-Default-Mismatch.**
-  Tool-Default in `SubagentParams` ist `"user"`, AGENTS.md verlangt überall
-  `agentScope: "both"`. Vergisst der Orchestrator das, sind Projektagenten
-  unsichtbar.
-  → Default auf `"both"` umstellen oder per `.pi`-Config überschreibbar
-  machen.
+- [x] **A7 — `agentScope`-Default-Mismatch.** *(erledigt 2026-06-10)*
+  Default ist jetzt `"both"` (AgentScopeSchema, execute(), renderCall(),
+  AGENTS.md). Alle redundanten `agentScope: "both"`-Zeilen in AGENTS.md-
+  Beispielen entfernt. Sicherheitsnetz dafür: D33 (Headless-Safeguard).
 
 - [x] **A8 — `pi`-Integrationsversion wird nicht geprüft.** *(erledigt 2026-06-10)*
   `assertHerdrRuntime` ruft jetzt zusätzlich `herdr integration status`,
@@ -64,10 +61,10 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   durch, weil noch lauffähig — könnte später noch via `onUpdate` als
   Warnung erscheinen.
 
-- [ ] **A9 — `withFileMutationQueue` für frisches Tmp-File ist Overkill.**
-  `writePromptToTempFile` nutzt die Mutation-Queue für ein eindeutig
-  benanntes Tmp-File ohne Contention. Unnötige Komplexität.
-  → direktes `fs.promises.writeFile`.
+- [x] **A9 — `withFileMutationQueue` für frisches Tmp-File ist Overkill.** *(erledigt 2026-06-10)*
+  Entfernt. `writePromptToTempFile` ruft `fs.promises.writeFile` direkt;
+  Import von `withFileMutationQueue` aus `@earendil-works/pi-coding-agent`
+  weg.
 
 - [x] **A10 — `closeWorkerPane` schluckt alle Fehler als "kept-open".** *(erledigt 2026-06-10)*
   Differenziert jetzt per Regex auf der Fehlermeldung: `not[ _-]found`,
@@ -136,20 +133,22 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   OS-erzwungene Schreibsperre.
   Datei: `.pi/agents/reviewer.md`, `lifecycle.ts:buildWorkerStartArgs`.
 
-- [ ] **C21 — Tool-Listen enthalten potenziell Nicht-Tools.**
-  `grep, find, ls` werden als kommagetrennte Tools an `pi --tools` übergeben.
-  Falls Pi diese nicht als eigene Tools kennt, werden sie ignoriert. Bash
-  deckt sie ohnehin ab.
-  → klären, welche Strings pi tatsächlich versteht; Redundanz entfernen.
+- [x] **C21 — Tool-Listen enthalten potenziell Nicht-Tools.** *(erledigt 2026-06-10)*
+  `grep, find, ls` aus allen Rollen entfernt — sind via `bash` ohnehin
+  erreichbar. Neue Tool-Listen: planner `read,bash`, reviewer `read,bash`,
+  submitter `read,bash`, developer/fixer/tester `read,write,edit,bash`,
+  orchestrator `read,subagent`. AGENTS.md-Tabelle synchronisiert.
 
-- [ ] **C22 — Orchestrator hat write/edit/bash.**
-  Als reiner Koordinator sollte er nur das `subagent`-Tool bekommen.
-  Reduziert Foot-Gun-Risiko.
+- [x] **C22 — Orchestrator hat write/edit/bash.** *(erledigt 2026-06-10)*
+  Orchestrator-Tools auf `read, subagent` reduziert. write/edit/bash/grep/
+  find/ls weg. Body-Text der Rolle aktualisiert: erklärt explizit, dass
+  delegiert werden muss, weil keine Edit-Tools verfügbar sind.
 
-- [ ] **C23 — Keine Branch-Enforcement im `developer.md`.**
-  Prompt sagt "feature/<task-name>-Branch", aber nichts zwingt den Agenten,
-  sich darauf zu bewegen.
-  → erste Bash-Action soll `git checkout -b feature/...` sein.
+- [x] **C23 — Keine Branch-Enforcement im `developer.md`.** *(erledigt 2026-06-10)*
+  Workflow-Block "Branch hygiene (FIRST step)" als allerersten Schritt
+  ergänzt: `git fetch origin main && git checkout feature/<name> ||
+  git checkout -b feature/<name> origin/main`, plus `git branch --show-
+  current`-Verifikation und Warnung "never modify files while on main".
 
 - [x] **C24 — Keine Rolle erklärt das JSON-Envelope.** *(erledigt 2026-06-10)*
   Alle 7 Rollen (developer, reviewer, fixer, tester, planner, submitter,
@@ -189,10 +188,11 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   Worker-Pfad setzt `worker-error` automatisch wenn der Worker selbst
   `status: "error"` ohne errorKind emittiert.
 
-- [ ] **D30 — `SUBAGENT_DONE_TOKEN` ist toter Code.**
-  Im Prompt noch als "MAY" erwähnt, nirgends geparst.
-  → entweder raus oder als Fallback-Signal reanimieren (z.B. wenn
-  `agent_status` nie aus `working` rauskommt).
+- [x] **D30 — `SUBAGENT_DONE_TOKEN` ist toter Code.** *(erledigt 2026-06-10)*
+  Export aus `protocol.ts` entfernt, "MAY-add-marker"-Klausel aus
+  `buildWorkerPrompt` raus, Test-Fixture nutzt jetzt einen neutralen
+  Trailing-String. AGENTS.md-Erwähnung "legacy token" beibehalten als
+  Historie für altes Worker-Output.
 
 - [ ] **D31 — Kein Test für `index.ts`-Orchestrierung.**
   Alle Tests decken Helfer ab, End-to-End-Logik ist ungetestet.
@@ -202,9 +202,11 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   Bei langen Sessions könnte das finale JSON außerhalb des Fensters liegen.
   → konfigurierbar oder bei Parse-Fail mit größerem Buffer retryen.
 
-- [ ] **D33 — Projektagent-Confirmation nur mit UI.**
-  Headless/CI-Runs führen Projektagenten ohne Rückfrage aus.
-  → mind. via Env-Var/Config opt-out-bar machen.
+- [x] **D33 — Projektagent-Confirmation nur mit UI.** *(erledigt 2026-06-10)*
+  Headless-Modus mit Projektagent ist jetzt standardmäßig BLOCKIERT (nicht
+  mehr stillschweigend erlaubt). Opt-out: entweder `confirmProjectAgents:
+  false` explizit setzen oder `PI_SUBAGENT_TRUST_PROJECT_AGENTS=1`
+  environment-Variable. Fehler-Nachricht erklärt beide Wege.
 
 ---
 
