@@ -22,16 +22,27 @@ export function formatLifecycleSummary(summary: LifecycleSummary): string {
 	return text;
 }
 
-function formatList(title: string, items: string[]): string {
-	return `${title}:\n${items.map((item) => `- ${item}`).join("\n")}`;
+function formatTableValue(value: unknown): string {
+	const text = Array.isArray(value) ? value.join("<br>") : String(value);
+	return text.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 }
 
 export function formatSubagentPayload(payload: SubagentProtocolPayload): string {
-	const parts = [`${payload.status.toUpperCase()}: ${payload.summary}`];
-	if (payload.output) parts.push(`Output:\n${payload.output}`);
-	if (payload.error) parts.push(`Error:\n${payload.error}`);
-	if (payload.filesChanged?.length) parts.push(formatList("Files changed", payload.filesChanged));
-	if (payload.tests?.length) parts.push(formatList("Tests", payload.tests));
-	if (payload.notes) parts.push(`Notes:\n${payload.notes}`);
-	return parts.join("\n\n");
+	const preferredOrder = ["status", "summary", "output", "filesChanged", "tests", "notes", "error"];
+	const rows: Array<[string, unknown]> = [];
+	const seen = new Set<string>();
+
+	for (const key of preferredOrder) {
+		const value = (payload as Record<string, unknown>)[key];
+		if (value === undefined || (Array.isArray(value) && value.length === 0) || value === "") continue;
+		rows.push([key, value]);
+		seen.add(key);
+	}
+
+	for (const [key, value] of Object.entries(payload)) {
+		if (seen.has(key) || value === undefined || (Array.isArray(value) && value.length === 0) || value === "") continue;
+		rows.push([key, value]);
+	}
+
+	return ["| Field | Value |", "|---|---|", ...rows.map(([key, value]) => `| ${key} | ${formatTableValue(value)} |`)].join("\n");
 }

@@ -45,17 +45,17 @@ export function buildPiArgs(agent: { model?: string; tools?: string[] }, systemP
 export function buildWorkerPrompt(agentName: string, task: string): string {
 	return [
 		`You are running as subagent '${agentName}' in an ephemeral Herdr-managed pane.`,
-		"Complete the delegated task and then finish with the required machine-readable protocol.",
+		"Complete the delegated task, then finish your turn so Herdr's pi integration reports your agent_status as 'done'.",
 		"",
 		"Delegated task:",
 		task,
 		"",
-		"Required final response protocol:",
-		"1. Your final non-empty content before the completion token MUST be one JSON object.",
-		"2. The JSON object MUST match this schema:",
-		'{ "status": "success" | "error", "summary": string, "output"?: string, "filesChanged"?: string[], "tests"?: string[], "notes"?: string, "error"?: string }',
-		`3. The line immediately after the JSON object MUST be exactly: ${SUBAGENT_DONE_TOKEN}`,
-		"4. Do not put the final JSON in a markdown code fence.",
+		"Final-response protocol:",
+		"1. After completing the task, your final non-empty content MUST be one JSON object matching this schema:",
+		'   { "status": "success" | "error", "summary": string, "output"?: string, "filesChanged"?: string[], "tests"?: string[], "notes"?: string, "error"?: string }',
+		"2. Do NOT wrap the JSON in a markdown code fence.",
+		`3. You MAY add a trailing line with the marker ${SUBAGENT_DONE_TOKEN} after the JSON for human readability.`,
+		"4. End your turn immediately after the JSON (and optional marker). Do not ask a follow-up question.",
 	].join("\n");
 }
 
@@ -96,58 +96,57 @@ export function extractLastJsonObject(text: string): string | null {
 	return null;
 }
 
-function extractCompletionFrame(output: string): string | null {
-	let searchFrom = output.length;
-
-	while (searchFrom > 0) {
-		const tokenIndex = output.lastIndexOf(SUBAGENT_DONE_TOKEN, searchFrom - 1);
-		if (tokenIndex === -1) return null;
-
-		const beforeToken = output.slice(0, tokenIndex).trim();
-		const rawJson = extractLastJsonObject(beforeToken);
-		if (rawJson && beforeToken.endsWith(rawJson)) return rawJson;
-
-		searchFrom = tokenIndex;
-	}
-
-	return null;
-}
-
-function validateProtocolPayload(rawJson: string): ProtocolParseResult {
+function tryParseAsProtocolPayload(rawJson: string): SubagentProtocolPayload | null {
 	let payload: unknown;
 	try {
 		payload = JSON.parse(rawJson);
-	} catch (error) {
-		throw new Error(`Malformed final JSON: ${error instanceof Error ? error.message : String(error)}`);
+	} catch {
+		return null;
 	}
-
-	if (!payload || typeof payload !== "object") throw new Error("Final JSON must be an object");
+	if (!payload || typeof payload !== "object") return null;
 	const candidate = payload as Partial<SubagentProtocolPayload>;
-	if (candidate.status !== "success" && candidate.status !== "error") {
-		throw new Error("Final JSON field 'status' must be 'success' or 'error'");
-	}
-	if (typeof candidate.summary !== "string" || candidate.summary.trim() === "") {
-		throw new Error("Final JSON field 'summary' must be a non-empty string");
-	}
-	return { payload: candidate as SubagentProtocolPayload, rawJson };
+	if (candidate.status !== "success" && candidate.status !== "error") return null;
+	if (typeof candidate.summary !== "string" || candidate.summary.trim() === "") return null;
+	return candidate as SubagentProtocolPayload;
 }
 
-export function tryParseSubagentCompletion(output: string): ProtocolParseResult | null {
-	const rawJson = extractCompletionFrame(output);
-	if (!rawJson) return null;
-	return validateProtocolPayload(rawJson);
+/**
+ * Find the last well-formed protocol payload anywhere in the worker output.
+ *
+ * Scans backwards, skipping any malformed/unrelated JSON-like blocks, until it
+ * finds one that parses AND matches the protocol schema. This is tolerant to:
+ * - markdown code fences around the JSON
+ * - trailing prose, banners, or ANSI noise after the JSON
+ * - the legacy SUBAGENT_DONE_TOKEN being present or absent
+ * - prompt-echoed schema examples (those are not valid JSON, so they are skipped)
+ */
+export function findValidPayload(output: string): ProtocolParseResult | null {
+	let remaining = output;
+	while (remaining.length > 0) {
+		const rawJson = extractLastJsonObject(remaining);
+		if (!rawJson) return null;
+		const payload = tryParseAsProtocolPayload(rawJson);
+		if (payload) return { payload, rawJson };
+		const idx = remaining.lastIndexOf(rawJson);
+		if (idx === -1) return null;
+		remaining = remaining.slice(0, idx);
+	}
+	return null;
 }
 
-export function parseSubagentCompletion(output: string): ProtocolParseResult {
-	const tokenIndex = output.lastIndexOf(SUBAGENT_DONE_TOKEN);
-	if (tokenIndex === -1) throw new Error(`Missing completion token ${SUBAGENT_DONE_TOKEN}`);
-
-	const parsed = tryParseSubagentCompletion(output);
-	if (parsed) return parsed;
-
-	const beforeToken = output.slice(0, tokenIndex).trim();
-	if (!extractLastJsonObject(beforeToken)) throw new Error("Missing final JSON object before completion token");
-	throw new Error(`Final JSON object must be immediately followed by ${SUBAGENT_DONE_TOKEN}`);
+/**
+ * Synthesize a minimal protocol payload from raw output when the worker did
+ * not emit a parseable JSON frame. Used when agent_status has already reached
+ * a terminal state but no structured payload was found.
+ */
+export function synthesizeFallbackPayload(output: string, agentStatus?: string): SubagentProtocolPayload {
+	const tail = output.split(/\r?\n/).filter((line) => line.trim().length > 0).slice(-5).join("\n");
+	return {
+		status: "success",
+		summary: "Worker finished without emitting a structured JSON payload",
+		output: tail || output.slice(-2000),
+		notes: agentStatus ? `Inferred from agent_status=${agentStatus}` : "Inferred from agent_status",
+	};
 }
 
 export function makeRunName(agentName: string, id: string): string {

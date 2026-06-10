@@ -32,7 +32,7 @@ test("formatLifecycleSummary includes pane ref only for non-completed runs", () 
 	);
 });
 
-test("formatSubagentPayload renders summary JSON fields instead of dumping JSON", () => {
+test("formatSubagentPayload renders a human-readable table instead of dumping JSON", () => {
 	const text = formatSubagentPayload({
 		status: "success",
 		summary: "Created files",
@@ -42,10 +42,12 @@ test("formatSubagentPayload renders summary JSON fields instead of dumping JSON"
 		notes: "No blockers",
 	});
 
-	assert.match(text, /^SUCCESS: Created files/);
-	assert.match(text, /Output:\nPASS/);
-	assert.match(text, /Files changed:\n- ingos_world\.html\n- ingos_world\.js/);
-	assert.match(text, /Tests:\n- node --test/);
-	assert.match(text, /Notes:\nNo blockers/);
-	assert.doesNotMatch(text, /"status"|"summary"|\{.*\}/s);
+	assert.match(text, /^\| Field \| Value \|/);
+	assert.match(text, /\| status \| success \|/);
+	assert.match(text, /\| summary \| Created files \|/);
+	assert.match(text, /\| output \| PASS \|/);
+	assert.match(text, /\| filesChanged \| ingos_world\.html<br>ingos_world\.js \|/);
+	assert.match(text, /\| tests \| node --test \|/);
+	assert.match(text, /\| notes \| No blockers \|/);
+	assert.doesNotMatch(text, /\{.*\}/s);
 });

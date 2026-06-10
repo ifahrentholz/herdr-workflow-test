@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWorkerStartArgs, shellQuote, makePiCommand, getHerdrRuntimeError, extractPaneRef } from "./lifecycle.ts";
+import {
+	MIN_HEIGHT_AFTER_DOWN_SPLIT,
+	MIN_WIDTH_AFTER_RIGHT_SPLIT,
+	buildWorkerStartArgs,
+	chooseSplitDirection,
+	extractPaneRef,
+	extractWorkspaceId,
+	getHerdrRuntimeError,
+	makePiCommand,
+	shellQuote,
+} from "./lifecycle.ts";
 
 test("shellQuote safely quotes worker command arguments", () => {
 	assert.equal(shellQuote("simple"), "'simple'");
@@ -15,7 +25,7 @@ test("makePiCommand builds an interactive pi command from args", () => {
 	);
 });
 
-test("buildWorkerStartArgs starts an ephemeral Herdr agent in current context split", () => {
+test("buildWorkerStartArgs defaults to right-split and no-focus", () => {
 	const args = buildWorkerStartArgs({
 		runName: "developer-abc123",
 		cwd: "/repo/path",
@@ -36,6 +46,46 @@ test("buildWorkerStartArgs starts an ephemeral Herdr agent in current context sp
 		"-lc",
 		"pi '--no-session' '--tools' 'read,bash'",
 	]);
+});
+
+test("buildWorkerStartArgs honors a caller-provided split direction", () => {
+	const args = buildWorkerStartArgs({
+		runName: "developer-abc",
+		cwd: "/repo",
+		piArgs: ["--no-session"],
+		split: "down",
+	});
+	assert.equal(args[args.indexOf("--split") + 1], "down");
+});
+
+test("chooseSplitDirection prefers right when there is plenty of horizontal room", () => {
+	assert.equal(chooseSplitDirection({ paneCount: 1, columns: 240, rows: 60 }), "right");
+	assert.equal(chooseSplitDirection({ paneCount: 2, columns: 320, rows: 80 }), "right");
+});
+
+test("chooseSplitDirection switches to down when a right-split would be too narrow", () => {
+	// Single pane that is only 120 cols wide → right would yield 60 cols per half, below MIN.
+	assert.equal(chooseSplitDirection({ paneCount: 1, columns: 120, rows: 60 }), "down");
+});
+
+test("chooseSplitDirection accounts for existing horizontal splits diluting the focused pane", () => {
+	// 200 cols already divided across 3 right-split panes → ~66 cols each → narrower than MIN after another right split.
+	assert.equal(chooseSplitDirection({ paneCount: 3, columns: 200, rows: 60 }), "down");
+});
+
+test("chooseSplitDirection falls back to right for sparse panes when terminal size is unknown", () => {
+	assert.equal(chooseSplitDirection({ paneCount: 1 }), "right");
+	assert.equal(chooseSplitDirection({ paneCount: 2 }), "right");
+});
+
+test("chooseSplitDirection falls back to down once enough panes accumulate without geometry info", () => {
+	assert.equal(chooseSplitDirection({ paneCount: 3 }), "down");
+	assert.equal(chooseSplitDirection({ paneCount: 10 }), "down");
+});
+
+test("chooseSplitDirection thresholds are sensibly chosen", () => {
+	assert.ok(MIN_WIDTH_AFTER_RIGHT_SPLIT >= 60);
+	assert.ok(MIN_HEIGHT_AFTER_DOWN_SPLIT >= 10);
 });
 
 test("extractPaneRef parses Herdr agent start JSON output", () => {
@@ -63,6 +113,19 @@ test("extractPaneRef parses Herdr agent start JSON with a top-level agent shape"
 	});
 
 	assert.equal(extractPaneRef(output, "developer-abc123"), "w653e52a6f42d22-4");
+});
+
+test("extractWorkspaceId returns the workspace id from agent start JSON", () => {
+	const output = JSON.stringify({
+		result: {
+			agent: {
+				pane_id: "p-1",
+				workspace_id: "w-7",
+			},
+		},
+	});
+	assert.equal(extractWorkspaceId(output), "w-7");
+	assert.equal(extractWorkspaceId("no json"), null);
 });
 
 test("runtime guard error is explicit about Herdr requirement", () => {

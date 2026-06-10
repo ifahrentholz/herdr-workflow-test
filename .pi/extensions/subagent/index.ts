@@ -3,11 +3,19 @@
  *
  * Delegates exactly one task to an ephemeral, role-specific pi worker running in a
  * Herdr-managed pane. The main agent remains the broker: it starts the worker,
- * sends one structured prompt, waits for the completion token, parses the final
- * JSON payload, and applies cleanup policy.
+ * sends one structured prompt, waits for the Herdr pi integration to report the
+ * worker's agent_status as a terminal state (done/idle), then reads the final
+ * output, best-effort parses a structured JSON payload, and applies cleanup.
+ *
+ * Completion detection relies on Herdr's `agent_status` (set by the pi
+ * integration) rather than scraping a sentinel token out of the worker's text
+ * output. Text-output parsing is best-effort only — if the worker forgot the
+ * JSON envelope, completion still succeeds because the agent_status reached a
+ * terminal state.
  */
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,27 +27,39 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { buildPromptRunArgs } from "./broker.ts";
-import { buildWorkerStartArgs, extractPaneRef, getHerdrRuntimeError } from "./lifecycle.ts";
 import {
-	SUBAGENT_DONE_TOKEN,
+	buildWorkerStartArgs,
+	chooseSplitDirection,
+	extractPaneRef,
+	extractWorkspaceId,
+	getHerdrRuntimeError,
+	type SplitDirection,
+} from "./lifecycle.ts";
+import {
 	buildPiArgs,
 	buildWorkerPrompt,
+	findValidPayload,
 	makeRunName,
-	tryParseSubagentCompletion,
+	synthesizeFallbackPayload,
 	validateSingleModeParams,
 	type SubagentLifecycleState,
 	type SubagentProtocolPayload,
 } from "./protocol.ts";
 import { formatLifecycleSummary, formatSubagentPayload, getLifecycleIcon } from "./render.ts";
 import {
+	type AgentStatus,
 	DEFAULT_TIMEOUT_MS,
-	POLL_INTERVAL_MS,
-	PROGRESS_INTERVAL_MS,
+	TERMINAL_AGENT_STATUSES,
+	WAIT_CHUNK_MS,
 	buildAgentReadArgs,
 	buildPaneCloseArgs,
+	buildPaneGetArgs,
+	buildPaneListArgs,
 	buildPaneReadArgs,
+	buildWaitAgentStatusArgs,
 	makeTimeoutError,
-	shouldEmitProgress,
+	parseAgentStatus,
+	parsePaneCount,
 } from "./wait.ts";
 
 const execFileAsync = promisify(execFile);
@@ -51,10 +71,12 @@ interface SubagentDetails {
 	projectAgentsDir: string | null;
 	runName?: string;
 	paneRef?: string;
+	splitDirection?: SplitDirection;
 	state: SubagentLifecycleState;
 	startedAt: number;
 	completedAt?: number;
 	payload?: SubagentProtocolPayload;
+	agentStatus?: AgentStatus;
 	error?: string;
 	lastOutput?: string;
 	cleanup?: "closed" | "kept-open" | "not-started";
@@ -103,10 +125,6 @@ function cleanupTemp(dir: string | null, filePath: string | null) {
 	}
 }
 
-function makeText(payload: SubagentProtocolPayload): string {
-	return formatSubagentPayload(payload);
-}
-
 function makeDetails(base: Omit<SubagentDetails, "state" | "startedAt">, state: SubagentLifecycleState): SubagentDetails {
 	return { ...base, state, startedAt: Date.now() };
 }
@@ -130,6 +148,82 @@ async function closeWorkerPane(paneRef: string): Promise<"closed" | "kept-open">
 	}
 }
 
+async function getAgentStatus(paneRef: string): Promise<AgentStatus | null> {
+	try {
+		const { stdout } = await runHerdr(buildPaneGetArgs(paneRef), { timeout: 10_000 });
+		return parseAgentStatus(stdout);
+	} catch {
+		return null;
+	}
+}
+
+async function getPaneCount(cwd: string, workspaceId?: string): Promise<number> {
+	try {
+		const { stdout } = await runHerdr(buildPaneListArgs(workspaceId), { cwd, timeout: 10_000 });
+		return parsePaneCount(stdout) ?? 1;
+	} catch {
+		return 1;
+	}
+}
+
+function getTerminalSize(): { columns?: number; rows?: number } {
+	const stream = process.stdout;
+	if (stream && stream.isTTY && stream.columns && stream.rows) {
+		return { columns: stream.columns, rows: stream.rows };
+	}
+	return {};
+}
+
+interface WaitForCompletionResult {
+	status: AgentStatus;
+}
+
+/**
+ * Block until the worker's agent_status reaches a terminal state.
+ *
+ * Strategy:
+ * - Fast-path check via `pane get` (cheap single call).
+ * - Then block on `herdr wait agent-status --status done` for chunks of
+ *   WAIT_CHUNK_MS so the UI can emit progress and we can re-check status
+ *   (handles the `idle` case if the user manually focused the worker pane).
+ * - `blocked` is treated as a fatal error — the worker is waiting for user
+ *   input we can't provide.
+ */
+async function waitForCompletion(
+	paneRef: string,
+	overallTimeoutMs: number,
+	signal: AbortSignal | undefined,
+	onWaiting: (status: AgentStatus | null) => void,
+): Promise<WaitForCompletionResult> {
+	const deadline = Date.now() + overallTimeoutMs;
+
+	while (Date.now() < deadline) {
+		if (signal?.aborted) throw new Error("Subagent was aborted");
+
+		const currentStatus = await getAgentStatus(paneRef);
+		if (currentStatus && TERMINAL_AGENT_STATUSES.has(currentStatus)) {
+			return { status: currentStatus };
+		}
+		if (currentStatus === "blocked") {
+			throw new Error("Worker pane reached blocked state (awaiting user input)");
+		}
+
+		const remaining = Math.min(deadline - Date.now(), WAIT_CHUNK_MS);
+		if (remaining <= 0) break;
+
+		try {
+			await runHerdr(buildWaitAgentStatusArgs(paneRef, "done", remaining), {
+				timeout: remaining + 5_000,
+			});
+			return { status: "done" };
+		} catch {
+			onWaiting(currentStatus);
+		}
+	}
+
+	throw makeTimeoutError(overallTimeoutMs, "agent_status to reach done/idle");
+}
+
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 async function runHerdrAgent(options: {
@@ -145,13 +239,13 @@ async function runHerdrAgent(options: {
 	await assertHerdrRuntime(options.defaultCwd);
 
 	const cwd = options.cwd ?? options.defaultCwd;
-	const runName = makeRunName(options.agent.name, `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`);
+	const runName = makeRunName(options.agent.name, randomUUID());
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 	let paneRef = runName;
 	let lastOutput = "";
 
-	const detailsBase = {
+	const detailsBase: Omit<SubagentDetails, "state" | "startedAt"> = {
 		agent: options.agent.name,
 		agentSource: options.agent.source,
 		agentScope: options.agentScope,
@@ -174,71 +268,86 @@ async function runHerdrAgent(options: {
 			tmpPromptPath = tmp.filePath;
 		}
 
+		const paneCount = await getPaneCount(cwd);
+		const { columns, rows } = getTerminalSize();
+		const splitDirection = chooseSplitDirection({ paneCount, columns, rows });
+		detailsBase.splitDirection = splitDirection;
+
 		const piArgs = buildPiArgs(options.agent, tmpPromptPath ?? undefined);
-		const start = await runHerdr(buildWorkerStartArgs({ runName, cwd, piArgs }), { cwd });
+		const start = await runHerdr(
+			buildWorkerStartArgs({ runName, cwd, piArgs, split: splitDirection }),
+			{ cwd },
+		);
 		paneRef = extractPaneRef(start.stdout, runName);
 		detailsBase.paneRef = paneRef;
-		emit("spawned", `Spawned ${runName} in Herdr pane ${paneRef}.`);
+		const workspaceId = extractWorkspaceId(start.stdout);
+		emit(
+			"spawned",
+			`Spawned ${runName} in Herdr pane ${paneRef} (split:${splitDirection}${workspaceId ? `, workspace ${workspaceId}` : ""}).`,
+		);
 
 		const workerPrompt = buildWorkerPrompt(options.agent.name, options.task);
 		await runHerdr(buildPromptRunArgs(paneRef, workerPrompt), { cwd });
-		emit("prompted", `Prompt sent to ${runName}; waiting for ${SUBAGENT_DONE_TOKEN}.`);
+		emit("prompted", `Prompt sent to ${runName}; waiting for agent_status to reach done/idle.`);
 
-		const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
-		let nextProgressAt = Date.now();
+		const { status: terminalStatus } = await waitForCompletion(paneRef, DEFAULT_TIMEOUT_MS, options.signal, (current) => {
+			emit("waiting", `Waiting for ${runName} (current agent_status: ${current ?? "unknown"})...`, { agentStatus: current ?? undefined });
+		});
 
-		while (Date.now() < deadline) {
-			if (options.signal?.aborted) throw new Error("Subagent was aborted");
+		lastOutput = await readWorkerOutput(runName, paneRef);
+		const parsed = findValidPayload(lastOutput);
+		const payload = parsed?.payload ?? synthesizeFallbackPayload(lastOutput, terminalStatus);
 
-			lastOutput = await readWorkerOutput(runName, paneRef);
-			const parsed = tryParseSubagentCompletion(lastOutput);
-			if (parsed) {
-				if (parsed.payload.status === "error") {
-					return {
-						content: [{ type: "text", text: makeText(parsed.payload) }],
-						details: {
-							...makeDetails(detailsBase, "failed"),
-							paneRef,
-							completedAt: Date.now(),
-							payload: parsed.payload,
-							lastOutput,
-							cleanup: "kept-open",
-							error: parsed.payload.error ?? parsed.payload.summary,
-						},
-						isError: true,
-					};
-				}
-
-				const cleanup = await closeWorkerPane(paneRef);
-				return {
-					content: [{ type: "text", text: makeText(parsed.payload) }],
-					details: {
-						...makeDetails(detailsBase, "completed"),
-						paneRef,
-						completedAt: Date.now(),
-						payload: parsed.payload,
-						lastOutput,
-						cleanup,
-					},
-				};
-			}
-
-			if (shouldEmitProgress(Date.now(), nextProgressAt)) {
-				emit("waiting", `Waiting for ${runName}...`, { lastOutput });
-				nextProgressAt = Date.now() + PROGRESS_INTERVAL_MS;
-			}
-			await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+		if (payload.status === "error") {
+			return {
+				content: [{ type: "text", text: formatSubagentPayload(payload) }],
+				details: {
+					...makeDetails(detailsBase, "failed"),
+					paneRef,
+					completedAt: Date.now(),
+					payload,
+					agentStatus: terminalStatus,
+					lastOutput,
+					cleanup: "kept-open",
+					error: payload.error ?? payload.summary,
+				},
+				isError: true,
+			};
 		}
 
-		throw makeTimeoutError(DEFAULT_TIMEOUT_MS, SUBAGENT_DONE_TOKEN);
+		const cleanup = await closeWorkerPane(paneRef);
+		return {
+			content: [{ type: "text", text: formatSubagentPayload(payload) }],
+			details: {
+				...makeDetails(detailsBase, "completed"),
+				paneRef,
+				completedAt: Date.now(),
+				payload,
+				agentStatus: terminalStatus,
+				lastOutput,
+				cleanup,
+			},
+		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		const recoveredOutput = await readWorkerOutput(runName, paneRef).catch(() => "");
+		if (recoveredOutput) lastOutput = recoveredOutput;
+		const recoveredStatus = await getAgentStatus(paneRef);
+
+		const fallback: SubagentProtocolPayload = {
+			status: "error",
+			summary: "Subagent run failed",
+			error: message,
+		};
+
 		return {
-			content: [{ type: "text", text: `Subagent failed: ${message}\nWorker pane kept open: ${paneRef}` }],
+			content: [{ type: "text", text: formatSubagentPayload(fallback) }],
 			details: {
 				...makeDetails(detailsBase, "failed"),
 				paneRef,
 				completedAt: Date.now(),
+				payload: fallback,
+				agentStatus: recoveredStatus ?? undefined,
 				lastOutput,
 				error: message,
 				cleanup: paneRef ? "kept-open" : "not-started",

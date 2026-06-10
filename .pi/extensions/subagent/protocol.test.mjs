@@ -4,9 +4,9 @@ import {
 	SUBAGENT_DONE_TOKEN,
 	buildPiArgs,
 	buildWorkerPrompt,
+	findValidPayload,
 	makeRunName,
-	parseSubagentCompletion,
-	tryParseSubagentCompletion,
+	synthesizeFallbackPayload,
 	validateSingleModeParams,
 } from "./protocol.ts";
 
@@ -33,49 +33,76 @@ test("pi args preserve role model, tools, and system prompt wiring", () => {
 	]);
 });
 
-test("worker prompt requires JSON protocol and completion token", () => {
+test("worker prompt describes the JSON envelope without requiring the legacy completion token", () => {
 	const prompt = buildWorkerPrompt("reviewer", "Review the diff");
 	assert.match(prompt, /Review the diff/);
 	assert.match(prompt, /JSON object/);
-	assert.match(prompt, new RegExp(SUBAGENT_DONE_TOKEN.replace(/[<>]/g, "\\$&")));
+	assert.match(prompt, /agent_status/);
+	assert.match(prompt, /"status"/);
+	assert.match(prompt, /"summary"/);
+	// Token is now optional / human-readable only — mentioned as MAY, not MUST.
+	assert.match(prompt, new RegExp(`MAY[^\\n]*${SUBAGENT_DONE_TOKEN.replace(/[<>]/g, "\\$&")}`));
 });
 
-test("completion parser extracts and validates final JSON immediately before token", () => {
-	const output = `notes\n{"status":"success","summary":"done","output":"ok"}\n${SUBAGENT_DONE_TOKEN}\n`;
-	assert.deepEqual(parseSubagentCompletion(output).payload, {
+test("findValidPayload extracts a well-formed JSON frame anywhere in worker output", () => {
+	const output = `worker logs\n{"status":"success","summary":"done","output":"ok"}\n${SUBAGENT_DONE_TOKEN}\n`;
+	assert.deepEqual(findValidPayload(output)?.payload, {
 		status: "success",
 		summary: "done",
 		output: "ok",
 	});
 });
 
-test("completion parser ignores prompt-echoed completion tokens until a valid final frame appears", () => {
-	const promptEchoOnly = buildWorkerPrompt("developer", "do work");
-	assert.equal(tryParseSubagentCompletion(promptEchoOnly), null);
+test("findValidPayload tolerates trailing prose, banners, and markdown fences", () => {
+	const output = [
+		"# Report",
+		"```json",
+		'{"status":"success","summary":"done","filesChanged":["a.html"]}',
+		"```",
+		"",
+		"Run complete.",
+	].join("\n");
+	assert.deepEqual(findValidPayload(output)?.payload, {
+		status: "success",
+		summary: "done",
+		filesChanged: ["a.html"],
+	});
+});
 
-	const output = `${promptEchoOnly}\n\nworker logs\n{"status":"success","summary":"done after work"}\n${SUBAGENT_DONE_TOKEN}\n`;
-	assert.deepEqual(tryParseSubagentCompletion(output)?.payload, {
+test("findValidPayload skips malformed JSON-like blocks (e.g. echoed schema example) until a valid one is found", () => {
+	const echoedSchemaPrompt = buildWorkerPrompt("developer", "do work");
+	const output = `${echoedSchemaPrompt}\n\nworker logs\n{"status":"success","summary":"done after work"}\n`;
+	assert.deepEqual(findValidPayload(output)?.payload, {
 		status: "success",
 		summary: "done after work",
 	});
 });
 
-test("completion parser rejects prose or markdown fences between final JSON and token", () => {
-	assert.throws(
-		() => parseSubagentCompletion(`{"status":"success","summary":"done"}\nextra prose\n${SUBAGENT_DONE_TOKEN}`),
-		/immediately followed/,
-	);
-	assert.throws(
-		() => parseSubagentCompletion(`\`\`\`json\n{"status":"success","summary":"done"}\n\`\`\`\n${SUBAGENT_DONE_TOKEN}`),
-		/immediately followed/,
-	);
+test("findValidPayload returns null when no valid protocol payload is present", () => {
+	assert.equal(findValidPayload("no json here\n"), null);
+	assert.equal(findValidPayload(`{"status":"ok","summary":"done"}`), null); // invalid status
+	assert.equal(findValidPayload(`{"status":"success"}`), null); // missing summary
+	assert.equal(findValidPayload(`{"status":"success","summary":""}`), null); // empty summary
 });
 
-test("completion parser rejects missing token, malformed JSON, and invalid schema", () => {
-	assert.throws(() => parseSubagentCompletion('{"status":"success","summary":"done"}'), /Missing completion token/);
-	assert.throws(() => parseSubagentCompletion(`{"status":\n${SUBAGENT_DONE_TOKEN}`), /Missing final JSON|Malformed/);
-	assert.throws(() => parseSubagentCompletion(`{"status":"ok","summary":"done"}\n${SUBAGENT_DONE_TOKEN}`), /status/);
-	assert.throws(() => parseSubagentCompletion(`{"status":"success"}\n${SUBAGENT_DONE_TOKEN}`), /summary/);
+test("findValidPayload picks the latest (rightmost) valid payload when multiple exist", () => {
+	const output = [
+		'{"status":"error","summary":"first attempt"}',
+		"retrying...",
+		'{"status":"success","summary":"final attempt"}',
+	].join("\n");
+	assert.deepEqual(findValidPayload(output)?.payload, {
+		status: "success",
+		summary: "final attempt",
+	});
+});
+
+test("synthesizeFallbackPayload constructs a success payload with diagnostic context", () => {
+	const fallback = synthesizeFallbackPayload("line1\nline2\nlast meaningful line\n", "done");
+	assert.equal(fallback.status, "success");
+	assert.match(fallback.summary, /without emitting a structured JSON payload/);
+	assert.match(fallback.notes ?? "", /agent_status=done/);
+	assert.match(fallback.output ?? "", /last meaningful line/);
 });
 
 test("run names are unique-friendly and shell-safe", () => {
