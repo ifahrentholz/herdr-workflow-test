@@ -25,12 +25,12 @@ import {
 	buildPiArgs,
 	buildWorkerPrompt,
 	makeRunName,
-	parseSubagentCompletion,
+	tryParseSubagentCompletion,
 	validateSingleModeParams,
 	type SubagentLifecycleState,
 	type SubagentProtocolPayload,
 } from "./protocol.ts";
-import { formatLifecycleSummary, getLifecycleIcon } from "./render.ts";
+import { formatLifecycleSummary, formatSubagentPayload, getLifecycleIcon } from "./render.ts";
 import {
 	DEFAULT_TIMEOUT_MS,
 	POLL_INTERVAL_MS,
@@ -104,13 +104,7 @@ function cleanupTemp(dir: string | null, filePath: string | null) {
 }
 
 function makeText(payload: SubagentProtocolPayload): string {
-	const parts = [`${payload.status.toUpperCase()}: ${payload.summary}`];
-	if (payload.output) parts.push(payload.output);
-	if (payload.error) parts.push(`Error: ${payload.error}`);
-	if (payload.filesChanged?.length) parts.push(`Files changed:\n${payload.filesChanged.map((f) => `- ${f}`).join("\n")}`);
-	if (payload.tests?.length) parts.push(`Tests:\n${payload.tests.map((t) => `- ${t}`).join("\n")}`);
-	if (payload.notes) parts.push(`Notes:\n${payload.notes}`);
-	return parts.join("\n\n");
+	return formatSubagentPayload(payload);
 }
 
 function makeDetails(base: Omit<SubagentDetails, "state" | "startedAt">, state: SubagentLifecycleState): SubagentDetails {
@@ -197,8 +191,8 @@ async function runHerdrAgent(options: {
 			if (options.signal?.aborted) throw new Error("Subagent was aborted");
 
 			lastOutput = await readWorkerOutput(runName, paneRef);
-			if (lastOutput.includes(SUBAGENT_DONE_TOKEN)) {
-				const parsed = parseSubagentCompletion(lastOutput);
+			const parsed = tryParseSubagentCompletion(lastOutput);
+			if (parsed) {
 				if (parsed.payload.status === "error") {
 					return {
 						content: [{ type: "text", text: makeText(parsed.payload) }],
@@ -376,7 +370,7 @@ export default function (pi: ExtensionAPI) {
 		renderResult(result, _options, theme, _context) {
 			const details = result.details as SubagentDetails | undefined;
 			const content = result.content[0];
-			const text = content?.type === "text" ? content.text : "(no output)";
+			const text = details?.payload ? formatSubagentPayload(details.payload) : content?.type === "text" ? content.text : "(no output)";
 			if (!details) return new Text(text, 0, 0);
 
 			const icon = getLifecycleIcon(details.state);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getLifecycleIcon, formatLifecycleSummary } from "./render.ts";
+import { formatLifecycleSummary, formatSubagentPayload, getLifecycleIcon } from "./render.ts";
 
 test("lifecycle icons are concise and state-oriented", () => {
 	assert.equal(getLifecycleIcon("completed"), "✓");
@@ -30,4 +30,22 @@ test("formatLifecycleSummary includes pane ref only for non-completed runs", () 
 		formatLifecycleSummary({ agent: "reviewer", state: "completed", paneRef: "pane-123", cleanup: "closed" }),
 		"✓ reviewer completed cleanup:closed",
 	);
+});
+
+test("formatSubagentPayload renders summary JSON fields instead of dumping JSON", () => {
+	const text = formatSubagentPayload({
+		status: "success",
+		summary: "Created files",
+		output: "PASS",
+		filesChanged: ["ingos_world.html", "ingos_world.js"],
+		tests: ["node --test"],
+		notes: "No blockers",
+	});
+
+	assert.match(text, /^SUCCESS: Created files/);
+	assert.match(text, /Output:\nPASS/);
+	assert.match(text, /Files changed:\n- ingos_world\.html\n- ingos_world\.js/);
+	assert.match(text, /Tests:\n- node --test/);
+	assert.match(text, /Notes:\nNo blockers/);
+	assert.doesNotMatch(text, /"status"|"summary"|\{.*\}/s);
 });

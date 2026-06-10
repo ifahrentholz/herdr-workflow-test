@@ -96,17 +96,24 @@ export function extractLastJsonObject(text: string): string | null {
 	return null;
 }
 
-export function parseSubagentCompletion(output: string): ProtocolParseResult {
-	const tokenIndex = output.lastIndexOf(SUBAGENT_DONE_TOKEN);
-	if (tokenIndex === -1) throw new Error(`Missing completion token ${SUBAGENT_DONE_TOKEN}`);
+function extractCompletionFrame(output: string): string | null {
+	let searchFrom = output.length;
 
-	const beforeToken = output.slice(0, tokenIndex).trim();
-	const rawJson = extractLastJsonObject(beforeToken);
-	if (!rawJson) throw new Error("Missing final JSON object before completion token");
-	if (!beforeToken.endsWith(rawJson)) {
-		throw new Error(`Final JSON object must be immediately followed by ${SUBAGENT_DONE_TOKEN}`);
+	while (searchFrom > 0) {
+		const tokenIndex = output.lastIndexOf(SUBAGENT_DONE_TOKEN, searchFrom - 1);
+		if (tokenIndex === -1) return null;
+
+		const beforeToken = output.slice(0, tokenIndex).trim();
+		const rawJson = extractLastJsonObject(beforeToken);
+		if (rawJson && beforeToken.endsWith(rawJson)) return rawJson;
+
+		searchFrom = tokenIndex;
 	}
 
+	return null;
+}
+
+function validateProtocolPayload(rawJson: string): ProtocolParseResult {
 	let payload: unknown;
 	try {
 		payload = JSON.parse(rawJson);
@@ -123,6 +130,24 @@ export function parseSubagentCompletion(output: string): ProtocolParseResult {
 		throw new Error("Final JSON field 'summary' must be a non-empty string");
 	}
 	return { payload: candidate as SubagentProtocolPayload, rawJson };
+}
+
+export function tryParseSubagentCompletion(output: string): ProtocolParseResult | null {
+	const rawJson = extractCompletionFrame(output);
+	if (!rawJson) return null;
+	return validateProtocolPayload(rawJson);
+}
+
+export function parseSubagentCompletion(output: string): ProtocolParseResult {
+	const tokenIndex = output.lastIndexOf(SUBAGENT_DONE_TOKEN);
+	if (tokenIndex === -1) throw new Error(`Missing completion token ${SUBAGENT_DONE_TOKEN}`);
+
+	const parsed = tryParseSubagentCompletion(output);
+	if (parsed) return parsed;
+
+	const beforeToken = output.slice(0, tokenIndex).trim();
+	if (!extractLastJsonObject(beforeToken)) throw new Error("Missing final JSON object before completion token");
+	throw new Error(`Final JSON object must be immediately followed by ${SUBAGENT_DONE_TOKEN}`);
 }
 
 export function makeRunName(agentName: string, id: string): string {

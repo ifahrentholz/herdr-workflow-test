@@ -6,6 +6,7 @@ import {
 	buildWorkerPrompt,
 	makeRunName,
 	parseSubagentCompletion,
+	tryParseSubagentCompletion,
 	validateSingleModeParams,
 } from "./protocol.ts";
 
@@ -45,6 +46,17 @@ test("completion parser extracts and validates final JSON immediately before tok
 		status: "success",
 		summary: "done",
 		output: "ok",
+	});
+});
+
+test("completion parser ignores prompt-echoed completion tokens until a valid final frame appears", () => {
+	const promptEchoOnly = buildWorkerPrompt("developer", "do work");
+	assert.equal(tryParseSubagentCompletion(promptEchoOnly), null);
+
+	const output = `${promptEchoOnly}\n\nworker logs\n{"status":"success","summary":"done after work"}\n${SUBAGENT_DONE_TOKEN}\n`;
+	assert.deepEqual(tryParseSubagentCompletion(output)?.payload, {
+		status: "success",
+		summary: "done after work",
 	});
 });
 

@@ -62,6 +62,32 @@ Runtime behavior:
 - Project-local agent confirmation remains required when configured.
 - Worker final output is returned through the tool's required JSON protocol; role-specific Markdown reports should be placed in the JSON `output` field.
 
+### Subagent Protocol Failure Recovery
+
+A failed `subagent` tool call does **not** automatically mean the delegated task failed. It may only mean the worker did not finish with the required JSON + `<<<SUBAGENT_DONE>>>` protocol.
+
+If a `subagent` call fails because of a malformed, missing, or delayed final protocol:
+
+1. **Do not immediately spawn a replacement agent.** This can duplicate work and violates the spirit of the single-agent lock.
+2. Read the kept-open worker pane with `herdr read`.
+3. Check whether the task already ran and whether files were changed.
+4. If the worker is still usable and the task did not start or did not finish cleanly, continue in the **same pane** with `herdr run` using an explicit instruction to execute the task and finish with the required protocol.
+5. Wait for `<<<SUBAGENT_DONE>>>` with `herdr watch`.
+6. Verify changed files directly before deciding the next workflow step.
+7. Only spawn a new subagent if the existing worker pane is unusable, blocked, or clearly abandoned.
+
+Recovery prompt to use when continuing an open worker pane:
+
+```text
+Bitte führe die delegierte Aufgabe jetzt aktiv aus. Antworte am Ende ausschließlich mit einem JSON-Objekt, direkt gefolgt von einer neuen Zeile mit <<<SUBAGENT_DONE>>>. Kein Markdown, kein weiterer Text.
+```
+
+When composing any `subagent` task, include an explicit final-protocol reminder:
+
+```text
+Wichtig: Führe die Aufgabe jetzt aktiv aus. Antworte am Ende ausschließlich mit einem JSON-Objekt, direkt gefolgt von einer neuen Zeile mit <<<SUBAGENT_DONE>>>. Kein Markdown, kein weiterer Text.
+```
+
 ---
 
 ## Phase 1 — Design & Grilling

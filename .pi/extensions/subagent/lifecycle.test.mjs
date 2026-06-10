@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildWorkerStartArgs, shellQuote, makePiCommand, getHerdrRuntimeError } from "./lifecycle.ts";
+import { buildWorkerStartArgs, shellQuote, makePiCommand, getHerdrRuntimeError, extractPaneRef } from "./lifecycle.ts";
 
 test("shellQuote safely quotes worker command arguments", () => {
 	assert.equal(shellQuote("simple"), "'simple'");
@@ -36,6 +36,33 @@ test("buildWorkerStartArgs starts an ephemeral Herdr agent in current context sp
 		"-lc",
 		"pi '--no-session' '--tools' 'read,bash'",
 	]);
+});
+
+test("extractPaneRef parses Herdr agent start JSON output", () => {
+	const output = JSON.stringify({
+		id: "cli:agent:start",
+		result: {
+			agent: {
+				name: "developer-abc123",
+				pane_id: "w653e52a6f42d22-3",
+				tab_id: "w653e52a6f42d22:1",
+				workspace_id: "w653e52a6f42d22",
+			},
+			type: "agent_started",
+		},
+	});
+
+	assert.equal(extractPaneRef(output, "developer-abc123"), "w653e52a6f42d22-3");
+});
+
+test("extractPaneRef parses Herdr agent start JSON with a top-level agent shape", () => {
+	const output = JSON.stringify({
+		agent: {
+			pane_id: "w653e52a6f42d22-4",
+		},
+	});
+
+	assert.equal(extractPaneRef(output, "developer-abc123"), "w653e52a6f42d22-4");
 });
 
 test("runtime guard error is explicit about Herdr requirement", () => {
