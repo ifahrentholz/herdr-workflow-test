@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	SUBAGENT_DONE_TOKEN,
+	SubagentRunError,
 	buildPiArgs,
 	buildWorkerPrompt,
+	classifyUnknownError,
 	findValidPayload,
 	makeRunName,
 	synthesizeFallbackPayload,
@@ -107,4 +109,26 @@ test("synthesizeFallbackPayload constructs a success payload with diagnostic con
 
 test("run names are unique-friendly and shell-safe", () => {
 	assert.equal(makeRunName("Code Reviewer!", "ABCDEF123456"), "code-reviewer-abcdef12");
+});
+
+test("SubagentRunError preserves its kind for orchestrator-facing categorization", () => {
+	const err = new SubagentRunError("timeout", "wait deadline reached");
+	assert.equal(err.kind, "timeout");
+	assert.equal(err.name, "SubagentRunError");
+	assert.match(err.message, /wait deadline/);
+});
+
+test("classifyUnknownError respects SubagentRunError, AbortError, and falls back to exec-fail", () => {
+	assert.equal(classifyUnknownError(new SubagentRunError("blocked", "x")), "blocked");
+
+	const abortErr = new Error("aborted");
+	abortErr.name = "AbortError";
+	assert.equal(classifyUnknownError(abortErr), "aborted");
+
+	const altAbort = new Error("aborted");
+	altAbort.name = "ABORT_ERR";
+	assert.equal(classifyUnknownError(altAbort), "aborted");
+
+	assert.equal(classifyUnknownError(new Error("connection refused")), "exec-fail");
+	assert.equal(classifyUnknownError("plain string error"), "exec-fail");
 });

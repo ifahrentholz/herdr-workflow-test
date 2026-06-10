@@ -40,15 +40,19 @@ import {
 import {
 	buildPiArgs,
 	buildWorkerPrompt,
+	classifyUnknownError,
 	findValidPayload,
 	makeRunName,
+	SubagentRunError,
 	synthesizeFallbackPayload,
 	validateSingleModeParams,
+	type SubagentErrorKind,
 	type SubagentLifecycleState,
 	type SubagentProtocolPayload,
 } from "./protocol.ts";
 import { formatLifecycleSummary, formatSubagentPayload, getLifecycleIcon } from "./render.ts";
 import {
+	type ActiveWorkspaceInfo,
 	type AgentStatus,
 	DEFAULT_TIMEOUT_MS,
 	TERMINAL_AGENT_STATUSES,
@@ -56,12 +60,12 @@ import {
 	buildAgentReadArgs,
 	buildPaneCloseArgs,
 	buildPaneGetArgs,
-	buildPaneListArgs,
 	buildPaneReadArgs,
 	buildWaitAgentStatusArgs,
+	buildWorkspaceListArgs,
 	makeTimeoutError,
+	parseActiveWorkspace,
 	parseAgentStatus,
-	parsePaneCount,
 } from "./wait.ts";
 
 const execFileAsync = promisify(execFile);
@@ -84,11 +88,15 @@ interface SubagentDetails {
 	cleanup?: "closed" | "kept-open" | "not-started";
 }
 
-async function runHerdr(args: string[], options: { cwd?: string; timeout?: number } = {}) {
+async function runHerdr(
+	args: string[],
+	options: { cwd?: string; timeout?: number; signal?: AbortSignal } = {},
+) {
 	return execFileAsync("herdr", args, {
 		cwd: options.cwd,
 		timeout: options.timeout ?? 30_000,
 		maxBuffer: 1024 * 1024,
+		signal: options.signal,
 	});
 }
 
@@ -179,21 +187,21 @@ async function closeWorkerPane(paneRef: string): Promise<"closed" | "kept-open">
 	}
 }
 
-async function getAgentStatus(paneRef: string): Promise<AgentStatus | null> {
+async function getAgentStatus(paneRef: string, signal?: AbortSignal): Promise<AgentStatus | null> {
 	try {
-		const { stdout } = await runHerdr(buildPaneGetArgs(paneRef), { timeout: 10_000 });
+		const { stdout } = await runHerdr(buildPaneGetArgs(paneRef), { timeout: 10_000, signal });
 		return parseAgentStatus(stdout);
 	} catch {
 		return null;
 	}
 }
 
-async function getPaneCount(cwd: string, workspaceId?: string): Promise<number> {
+async function getActiveWorkspace(cwd: string, signal?: AbortSignal): Promise<ActiveWorkspaceInfo | null> {
 	try {
-		const { stdout } = await runHerdr(buildPaneListArgs(workspaceId), { cwd, timeout: 10_000 });
-		return parsePaneCount(stdout) ?? 1;
+		const { stdout } = await runHerdr(buildWorkspaceListArgs(), { cwd, timeout: 10_000, signal });
+		return parseActiveWorkspace(stdout);
 	} catch {
-		return 1;
+		return null;
 	}
 }
 
@@ -229,14 +237,17 @@ async function waitForCompletion(
 	const deadline = Date.now() + overallTimeoutMs;
 
 	while (Date.now() < deadline) {
-		if (signal?.aborted) throw new Error("Subagent was aborted");
+		if (signal?.aborted) throw new SubagentRunError("aborted", "Subagent was aborted");
 
-		const currentStatus = await getAgentStatus(paneRef);
+		const currentStatus = await getAgentStatus(paneRef, signal);
 		if (currentStatus && TERMINAL_AGENT_STATUSES.has(currentStatus)) {
 			return { status: currentStatus };
 		}
 		if (currentStatus === "blocked") {
-			throw new Error("Worker pane reached blocked state (awaiting user input)");
+			throw new SubagentRunError(
+				"blocked",
+				"Worker pane reached blocked state (awaiting user input)",
+			);
 		}
 
 		const remaining = Math.min(deadline - Date.now(), WAIT_CHUNK_MS);
@@ -245,17 +256,50 @@ async function waitForCompletion(
 		try {
 			await runHerdr(buildWaitAgentStatusArgs(paneRef, "done", remaining), {
 				timeout: remaining + 5_000,
+				signal,
 			});
 			return { status: "done" };
-		} catch {
+		} catch (err) {
+			if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
+				throw new SubagentRunError("aborted", "Subagent was aborted");
+			}
+			// Wait timeout or unrelated CLI hiccup — loop back to fast-path status check.
 			onWaiting(currentStatus);
 		}
 	}
 
-	throw makeTimeoutError(overallTimeoutMs, "agent_status to reach done/idle");
+	throw new SubagentRunError(
+		"timeout",
+		makeTimeoutError(overallTimeoutMs, "agent_status to reach done/idle").message,
+	);
 }
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
+
+export const MIN_TIMEOUT_MS = 10_000;
+export const MAX_TIMEOUT_MS = 60 * 60 * 1000;
+
+function clampTimeout(requested: number | undefined): number {
+	if (requested == null || !Number.isFinite(requested)) return DEFAULT_TIMEOUT_MS;
+	return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, Math.trunc(requested)));
+}
+
+function summaryForErrorKind(kind: SubagentErrorKind): string {
+	switch (kind) {
+		case "timeout":
+			return "Subagent run timed out waiting for agent_status to reach done/idle";
+		case "blocked":
+			return "Subagent worker is blocked (awaiting user input)";
+		case "aborted":
+			return "Subagent run was aborted";
+		case "pane-start-failed":
+			return "Subagent could not be spawned (no pane_id returned)";
+		case "exec-fail":
+			return "Subagent run failed (Herdr CLI error)";
+		case "worker-error":
+			return "Subagent worker reported an error";
+	}
+}
 
 async function runHerdrAgent(options: {
 	defaultCwd: string;
@@ -264,6 +308,7 @@ async function runHerdrAgent(options: {
 	cwd?: string;
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
+	timeoutMs?: number;
 	signal?: AbortSignal;
 	onUpdate?: OnUpdateCallback;
 }): Promise<AgentToolResult<SubagentDetails>> {
@@ -272,6 +317,7 @@ async function runHerdrAgent(options: {
 	const cwd = options.cwd ?? options.defaultCwd;
 	const runName = makeRunName(options.agent.name, randomUUID());
 	const startedAt = Date.now();
+	const timeoutMs = clampTimeout(options.timeoutMs);
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 	let paneRef: string | null = null;
@@ -305,7 +351,8 @@ async function runHerdrAgent(options: {
 			tmpPromptPath = tmp.filePath;
 		}
 
-		const paneCount = await getPaneCount(cwd);
+		const activeWorkspace = await getActiveWorkspace(cwd, options.signal);
+		const paneCount = activeWorkspace?.paneCount ?? 1;
 		const { columns, rows } = getTerminalSize();
 		const splitDirection = chooseSplitDirection({ paneCount, columns, rows });
 		detailsBase.splitDirection = splitDirection;
@@ -313,27 +360,28 @@ async function runHerdrAgent(options: {
 		const piArgs = buildPiArgs(options.agent, tmpPromptPath ?? undefined);
 		const start = await runHerdr(
 			buildWorkerStartArgs({ runName, cwd, piArgs, split: splitDirection }),
-			{ cwd },
+			{ cwd, signal: options.signal },
 		);
 		const extractedPaneRef = extractPaneRef(start.stdout);
 		if (!extractedPaneRef) {
-			throw new Error(
+			throw new SubagentRunError(
+				"pane-start-failed",
 				`herdr agent start did not return a pane_id; cannot track worker.\nRaw output:\n${start.stdout.slice(0, 500)}`,
 			);
 		}
 		paneRef = extractedPaneRef;
 		detailsBase.paneRef = paneRef;
-		const workspaceId = extractWorkspaceId(start.stdout);
+		const workspaceId = extractWorkspaceId(start.stdout) ?? activeWorkspace?.workspaceId;
 		emit(
 			"spawned",
-			`Spawned ${runName} in Herdr pane ${paneRef} (split:${splitDirection}${workspaceId ? `, workspace ${workspaceId}` : ""}).`,
+			`Spawned ${runName} in Herdr pane ${paneRef} (split:${splitDirection}${workspaceId ? `, workspace ${workspaceId}` : ""}, panes:${paneCount}).`,
 		);
 
 		const workerPrompt = buildWorkerPrompt(options.agent.name, options.task);
-		await runHerdr(buildPromptRunArgs(paneRef, workerPrompt), { cwd });
-		emit("prompted", `Prompt sent to ${runName}; waiting for agent_status to reach done/idle.`);
+		await runHerdr(buildPromptRunArgs(paneRef, workerPrompt), { cwd, signal: options.signal });
+		emit("prompted", `Prompt sent to ${runName}; waiting for agent_status to reach done/idle (timeout ${Math.round(timeoutMs / 60_000)} min).`);
 
-		const { status: terminalStatus } = await waitForCompletion(paneRef, DEFAULT_TIMEOUT_MS, options.signal, (current) => {
+		const { status: terminalStatus } = await waitForCompletion(paneRef, timeoutMs, options.signal, (current) => {
 			emit("waiting", `Waiting for ${runName} (current agent_status: ${current ?? "unknown"})...`, { agentStatus: current ?? undefined });
 		});
 
@@ -342,17 +390,21 @@ async function runHerdrAgent(options: {
 		const payload = parsed?.payload ?? synthesizeFallbackPayload(lastOutput, terminalStatus);
 
 		if (payload.status === "error") {
+			const enriched: SubagentProtocolPayload = {
+				...payload,
+				errorKind: payload.errorKind ?? "worker-error",
+			};
 			return {
-				content: [{ type: "text", text: formatSubagentPayload(payload) }],
+				content: [{ type: "text", text: formatSubagentPayload(enriched) }],
 				details: {
 					...makeDetails(detailsBase, "failed", startedAt),
 					paneRef,
 					completedAt: Date.now(),
-					payload,
+					payload: enriched,
 					agentStatus: terminalStatus,
 					lastOutput,
 					cleanup: "kept-open",
-					error: payload.error ?? payload.summary,
+					error: enriched.error ?? enriched.summary,
 				},
 				isError: true,
 			};
@@ -373,14 +425,16 @@ async function runHerdrAgent(options: {
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		const errorKind: SubagentErrorKind = classifyUnknownError(error);
 		const recoveredOutput = paneRef ? await readWorkerOutput(runName, paneRef).catch(() => "") : "";
 		if (recoveredOutput) lastOutput = recoveredOutput;
 		const recoveredStatus = paneRef ? await getAgentStatus(paneRef) : null;
 
 		const fallback: SubagentProtocolPayload = {
 			status: "error",
-			summary: "Subagent run failed",
+			summary: summaryForErrorKind(errorKind),
 			error: message,
+			errorKind,
 		};
 
 		return {
@@ -417,6 +471,14 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the worker agent" })),
+	timeoutMs: Type.Optional(
+		Type.Integer({
+			description:
+				"Maximum wait time for the worker to reach agent_status=done/idle, in milliseconds. Clamped to [10000, 3600000]. Default: 1200000 (20 min).",
+			minimum: MIN_TIMEOUT_MS,
+			maximum: MAX_TIMEOUT_MS,
+		}),
+	),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -503,6 +565,7 @@ export default function (pi: ExtensionAPI) {
 				cwd: params.cwd,
 				agentScope,
 				projectAgentsDir: discovery.projectAgentsDir,
+				timeoutMs: params.timeoutMs,
 				signal,
 				onUpdate,
 			});

@@ -51,3 +51,15 @@ test("formatSubagentPayload renders a human-readable table instead of dumping JS
 	assert.match(text, /\| notes \| No blockers \|/);
 	assert.doesNotMatch(text, /\{.*\}/s);
 });
+
+test("formatSubagentPayload surfaces errorKind so the orchestrator can branch on it", () => {
+	const text = formatSubagentPayload({
+		status: "error",
+		summary: "Subagent timed out",
+		error: "Timed out after 20 minutes",
+		errorKind: "timeout",
+	});
+	assert.match(text, /\| status \| error \|/);
+	assert.match(text, /\| errorKind \| timeout \|/);
+	assert.match(text, /\| error \| Timed out after 20 minutes \|/);
+});

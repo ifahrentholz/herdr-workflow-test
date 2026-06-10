@@ -28,7 +28,7 @@ function formatTableValue(value: unknown): string {
 }
 
 export function formatSubagentPayload(payload: SubagentProtocolPayload): string {
-	const preferredOrder = ["status", "summary", "output", "filesChanged", "tests", "notes", "error"];
+	const preferredOrder = ["status", "errorKind", "summary", "output", "filesChanged", "tests", "notes", "error"];
 	const rows: Array<[string, unknown]> = [];
 	const seen = new Set<string>();
 

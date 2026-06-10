@@ -2,6 +2,20 @@ export const SUBAGENT_DONE_TOKEN = "<<<SUBAGENT_DONE>>>";
 
 export type SubagentLifecycleState = "spawned" | "prompted" | "waiting" | "completed" | "failed";
 
+/**
+ * Categorises *why* a subagent run failed so the orchestrator can react
+ * differently (retry vs. surface to user vs. fix task and re-spawn). The
+ * worker itself only ever produces `worker-error`; the rest are set by the
+ * tool runtime when it intercepts a specific failure shape.
+ */
+export type SubagentErrorKind =
+	| "timeout" // agent_status never reached done/idle within the wait budget
+	| "blocked" // worker pane reached blocked state (awaiting user input)
+	| "aborted" // user/abort-signal cancelled the run
+	| "pane-start-failed" // herdr agent start didn't return a pane id
+	| "exec-fail" // a `herdr` CLI invocation rejected unexpectedly
+	| "worker-error"; // worker emitted status:"error" in its final JSON
+
 export interface SubagentProtocolPayload {
 	status: "success" | "error";
 	summary: string;
@@ -10,6 +24,27 @@ export interface SubagentProtocolPayload {
 	tests?: string[];
 	notes?: string;
 	error?: string;
+	errorKind?: SubagentErrorKind;
+}
+
+/**
+ * Typed error thrown by the subagent runtime. The kind drives orchestrator
+ * decisions and survives into the final payload's `errorKind` field.
+ */
+export class SubagentRunError extends Error {
+	readonly kind: SubagentErrorKind;
+	constructor(kind: SubagentErrorKind, message: string) {
+		super(message);
+		this.name = "SubagentRunError";
+		this.kind = kind;
+	}
+}
+
+export function classifyUnknownError(error: unknown): SubagentErrorKind {
+	if (error instanceof SubagentRunError) return error.kind;
+	const name = error instanceof Error ? error.name : "";
+	if (name === "AbortError" || name === "ABORT_ERR") return "aborted";
+	return "exec-fail";
 }
 
 export interface ProtocolParseResult {

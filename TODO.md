@@ -3,7 +3,9 @@
 Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
 `AGENTS.md`, `.pi/agents/*.md`, `.pi/extensions/subagent/*.ts`.
 
-**Fortschritt:** Batch 1 abgeschlossen (2026-06-10) — A1, A4, A8, A10, B11, B13, C24, E34, E35. Tests 48/48 grün.
+**Fortschritt:**
+- Batch 1 abgeschlossen (2026-06-10) — A1, A4, A8, A10, B11, B13, C24, E34, E35. Tests 48/48 grün.
+- Batch 2 abgeschlossen (2026-06-10) — A3, A5, D26, D29. Tests 55/55 grün.
 
 ---
 
@@ -21,21 +23,24 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   ein paralleler `--status blocked`-Wait würde sofort reagieren.
   Datei: `index.ts:200-225`.
 
-- [ ] **A3 — `AbortSignal` propagiert nicht in `herdr`-Subprozesse.**
-  `signal?.aborted` wird nur am Loop-Anfang geprüft; während eines blockenden
-  `herdr wait` (bis 30 s) ist kein Abbruch möglich.
-  → Signal an `execFile` weitergeben.
+- [x] **A3 — `AbortSignal` propagiert nicht in `herdr`-Subprozesse.** *(erledigt 2026-06-10)*
+  `runHerdr` nimmt jetzt optionales `signal` und reicht es an `execFile`
+  weiter. Alle Aufrufer in `runHerdrAgent`/`waitForCompletion`/
+  `getAgentStatus`/`getActiveWorkspace` propagieren das Signal. User-Abort
+  killt den laufenden `herdr wait`-Prozess sofort, statt bis zu 30 s zu
+  warten. AbortError wird in `SubagentRunError("aborted", ...)`
+  übersetzt.
 
 - [x] **A4 — `paneRef` fällt im Worst Case auf den `runName`-String zurück.** *(erledigt 2026-06-10)*
   `extractPaneRef` gibt jetzt `string | null` zurück und greift nur noch auf
   positive `pane_id`-Matches zu. `runHerdrAgent` wirft hart, wenn der Start
   keine pane_id liefert. Test ergänzt.
 
-- [ ] **A5 — `getPaneCount` ist nicht workspace-gescopt.**
-  `index.ts:160-166` ruft `buildPaneListArgs()` ohne Workspace. Bei mehreren
-  Workspaces falsche Split-Entscheidung.
-  → vorher aktiven Workspace via `herdr workspace list` ermitteln, dann
-  `pane list --workspace <id>`.
+- [x] **A5 — `getPaneCount` ist nicht workspace-gescopt.** *(erledigt 2026-06-10)*
+  Ersetzt durch `getActiveWorkspace()`, das `herdr workspace list` aufruft
+  und den fokussierten Workspace samt seines `pane_count`-Felds liest —
+  eine CLI-Roundtrip statt zwei. Die Split-Entscheidung verwendet jetzt
+  den korrekten Pane-Count des aktiven Workspaces.
 
 - [ ] **A6 — Worker-System-Prompt und Tool-Envelope-Prompt widersprechen sich.**
   z.B. `developer.md` sagt "Output format: ## Completed / ## Files Changed",
@@ -161,9 +166,11 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
 
 ## D. Verbesserungen ohne harten Fix-Bedarf
 
-- [ ] **D26 — Kein Per-Task-Timeout-Override.**
-  `DEFAULT_TIMEOUT_MS = 20 min` hart codiert. SubagentParams sollte
-  optionales `timeoutMs` annehmen.
+- [x] **D26 — Kein Per-Task-Timeout-Override.** *(erledigt 2026-06-10)*
+  `SubagentParams` hat jetzt optionales `timeoutMs` (Integer, min 10 s,
+  max 60 min). Wird via Typebox-Schema validiert UND zur Laufzeit per
+  `clampTimeout` gegen die Grenzen verteidigt. Default bleibt 20 min.
+  Der Lifecycle-Emit "prompted" zeigt das wirksame Timeout an.
 
 - [ ] **D27 — Kein Streaming des Worker-Outputs.**
   User sieht 20 min "Waiting...". Tail von `agent read` alle 30 s mitliefern.
@@ -173,11 +180,14 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
   abgebrochenen Runs bleibt der Tree dirty.
   → optionaler `git worktree`-Modus (s. auch C20).
 
-- [ ] **D29 — Keine strukturierte Fehler-Kategorisierung.**
-  `status: "error"` ist Freitext. Orchestrator kann nicht differenziert
-  reagieren.
-  → Enum: `timeout | blocked | exec-fail | worker-reported-error |
-  parse-fail`.
+- [x] **D29 — Keine strukturierte Fehler-Kategorisierung.** *(erledigt 2026-06-10)*
+  Neuer Type `SubagentErrorKind = "timeout" | "blocked" | "aborted" |
+  "pane-start-failed" | "exec-fail" | "worker-error"`. Eigene
+  `SubagentRunError`-Klasse trägt die Kategorie. `classifyUnknownError`
+  klassifiziert AbortError und Fremderror. `errorKind` ist jetzt Teil
+  von `SubagentProtocolPayload`, wird im Render-Table angezeigt, und der
+  Worker-Pfad setzt `worker-error` automatisch wenn der Worker selbst
+  `status: "error"` ohne errorKind emittiert.
 
 - [ ] **D30 — `SUBAGENT_DONE_TOKEN` ist toter Code.**
   Im Prompt noch als "MAY" erwähnt, nirgends geparst.
@@ -221,11 +231,10 @@ Survey-Ergebnis vom 2026-06-10. Gruppiert nach Schweregrad. Quellen:
 **Quick wins (high value, low risk):** ✅ alle abgeschlossen.
 A1, A4, A8, A10, B11, B13, C24, E34, E35.
 
-**Strukturelle Verbesserungen (mittel) — nächster Batch-Kandidat:**
-A3 (Signal-Propagation), A5 (Workspace-Scoping für pane count),
+**Strukturelle Verbesserungen (mittel):**
+A3, A5, D26, D29 ✅ abgeschlossen (Batch 2). Noch offen:
 B12 (Auto-Start nicht für Trivialfälle), B17 (Phase-Skip),
-C19 (Modell-Override pro Rolle), D26 (Per-Task-Timeout),
-D29 (Error-Kategorisierung).
+C19 (Modell-Override pro Rolle — braucht Entscheidung welches Modell je Rolle).
 
 **Größere Refactors (Designentscheidung gewünscht):**
 B16 (Orchestrator-Rolle vs. Main-Agent), C20 (Reviewer read-only Worktree),

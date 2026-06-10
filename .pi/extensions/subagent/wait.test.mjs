@@ -12,6 +12,8 @@ import {
 	buildPaneListArgs,
 	buildPaneReadArgs,
 	buildWaitAgentStatusArgs,
+	buildWorkspaceListArgs,
+	parseActiveWorkspace,
 	parseAgentStatus,
 	parsePaneCount,
 	shouldEmitProgress,
@@ -102,4 +104,33 @@ test("TERMINAL_AGENT_STATUSES identifies done and idle as terminal", () => {
 test("progress emits periodically and not before interval", () => {
 	assert.equal(shouldEmitProgress(1_000, 1_000), true);
 	assert.equal(shouldEmitProgress(999, 1_000), false);
+});
+
+test("buildWorkspaceListArgs targets `herdr workspace list`", () => {
+	assert.deepEqual(buildWorkspaceListArgs(), ["workspace", "list"]);
+});
+
+test("parseActiveWorkspace returns the focused workspace's id and pane count", () => {
+	const stdout = JSON.stringify({
+		result: {
+			workspaces: [
+				{ workspace_id: "w-1", focused: false, pane_count: 1 },
+				{ workspace_id: "w-2", focused: true, pane_count: 4 },
+			],
+		},
+	});
+	assert.deepEqual(parseActiveWorkspace(stdout), { workspaceId: "w-2", paneCount: 4 });
+});
+
+test("parseActiveWorkspace falls back to the first workspace when none is marked focused", () => {
+	const stdout = JSON.stringify({
+		result: { workspaces: [{ workspace_id: "w-only", focused: false, pane_count: 2 }] },
+	});
+	assert.deepEqual(parseActiveWorkspace(stdout), { workspaceId: "w-only", paneCount: 2 });
+});
+
+test("parseActiveWorkspace returns null for unrecognized shapes", () => {
+	assert.equal(parseActiveWorkspace("not json"), null);
+	assert.equal(parseActiveWorkspace(JSON.stringify({ result: { workspaces: [] } })), null);
+	assert.equal(parseActiveWorkspace(JSON.stringify({ result: { workspaces: [{ workspace_id: 7 }] } })), null);
 });
