@@ -11,6 +11,8 @@
 #   status                                  Pretty-print state
 #   host                                    Print detected git host
 #   doctor                                  Run all preflight checks
+#   import-issues [<file>]                  Register pre-created issues as tasks
+#                                            (reads .workflow/pending-issues.json by default)
 #   abort [--yes]                           Reset state (confirms unless --yes)
 
 set -euo pipefail
@@ -224,6 +226,52 @@ cmd_status() {
     return 0
   fi
   wf_state_summary
+}
+
+# cmd_import_issues — Register pre-created issues as tasks (no issue creation).
+# Reads .workflow/pending-issues.json (array of {title, url, slug?}) by default,
+# or another path passed as $1.
+cmd_import_issues() {
+  wf_state_require
+  local file="${1:-$WF_STATE_DIR/pending-issues.json}"
+  [ -f "$file" ] || wf_die 2 "Pending-issues file not found: $file"
+  jq empty "$file" 2>/dev/null || wf_die 2 "Invalid JSON: $file"
+
+  local host
+  host=$(wf_state_get '.host')
+  local backend=""
+  case "$host" in
+    github)             backend=github_issue ;;
+    gitlab_saas|gitlab_selfhosted) backend=gitlab_issue ;;
+    none)               wf_die 2 "Cannot import issues in host=none. Use 'wf task add' for local tasks." ;;
+    *)                  wf_die 2 "Unknown host: $host" ;;
+  esac
+
+  local count
+  count=$(jq 'length' "$file")
+  wf_step "Importing $count issue(s) from $file"
+
+  local i=0
+  while [ "$i" -lt "$count" ]; do
+    local title url slug
+    title=$(jq -r ".[$i].title" "$file")
+    url=$(jq -r ".[$i].url" "$file")
+    slug=$(jq -r ".[$i].slug // \"\"" "$file")
+    [ -z "$slug" ] && slug=$(slugify "$title")
+    [ "$title" = "null" ] || [ -z "$title" ] && wf_die 2 "Issue $i: missing title"
+    [ "$url" = "null" ]   || [ -z "$url" ]   && wf_die 2 "Issue $i: missing url"
+
+    local next_id branch
+    next_id=$(yq -r '(.tasks | map(.id) | max // 0) + 1' "$WF_STATE_FILE")
+    branch="feature/${slug}"
+    wf_state_add_task "$next_id" "$title" "$slug" "$branch" "$backend" "$url"
+    wf_ok "  #$next_id  $title  ($url)"
+    i=$((i + 1))
+  done
+
+  # Move the file aside so a second `wf import-issues` doesn't re-import.
+  mv "$file" "${file%.json}.imported-$(date +%Y%m%d-%H%M%S).json"
+  wf_info "Done. Run \`wf next\` to start."
 }
 
 cmd_resume() {
@@ -551,6 +599,7 @@ main() {
     status)  shift; cmd_status ;;
     host)    shift; cmd_host ;;
     doctor)  shift; cmd_doctor ;;
+    import-issues) shift; cmd_import_issues "$@" ;;
     abort)
       shift
       [ "${1:-}" = "--yes" ] && WF_YES=1
