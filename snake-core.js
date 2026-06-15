@@ -25,18 +25,20 @@ export function directionFromKey(key) {
 }
 
 const HIGHSCORE_KEY = 'snakeHighscore';
-const START_MOVES_PER_SECOND = 7;
-const MAX_MOVES_PER_SECOND = 14;
+const START_MOVE_DELAY_MS = 140;
+const MIN_MOVE_DELAY_MS = 70;
+const DELAY_REDUCTION_PER_SPEED_STEP_MS = 10;
 const SCORE_PER_SPEED_INCREASE = 5;
 
-export function movesPerSecondForScore(score) {
+export function moveDelayMsForScore(score) {
   const safeScore = Number.isSafeInteger(score) && score > 0 ? score : 0;
   const speedIncreases = Math.floor(safeScore / SCORE_PER_SPEED_INCREASE);
-  return Math.min(START_MOVES_PER_SECOND + speedIncreases, MAX_MOVES_PER_SECOND);
+  const delayMs = START_MOVE_DELAY_MS - speedIncreases * DELAY_REDUCTION_PER_SPEED_STEP_MS;
+  return Math.max(delayMs, MIN_MOVE_DELAY_MS);
 }
 
-export function moveDelayMsForScore(score) {
-  return 1000 / movesPerSecondForScore(score);
+export function movesPerSecondForScore(score) {
+  return 1000 / moveDelayMsForScore(score);
 }
 
 function safeBrowserStorage() {
