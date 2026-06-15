@@ -79,22 +79,55 @@ function placeFood(gridSize, snake, random) {
 export function createGame(options = {}) {
   const gridSize = options.gridSize ?? 20;
   const random = options.random ?? Math.random;
-  const snake = cloneCells(options.initialSnake ?? defaultSnake(gridSize));
-  const direction = options.initialDirection ?? directions.RIGHT;
+  const initialSnake = cloneCells(options.initialSnake ?? defaultSnake(gridSize));
+  const initialDirection = options.initialDirection ?? directions.RIGHT;
+  const initialFood = options.initialFood ? { ...options.initialFood } : null;
 
   let hasQueuedTurn = false;
 
   const state = {
     gridSize,
-    snake,
-    direction,
-    food: options.initialFood ? { ...options.initialFood } : placeFood(gridSize, snake, random),
+    snake: [],
+    direction: directions.RIGHT,
+    food: null,
     score: 0,
-    status: 'playing',
+    status: 'ready',
   };
+
+  function reset({ useProvidedInitialState = false } = {}) {
+    const snake = cloneCells(useProvidedInitialState ? initialSnake : defaultSnake(gridSize));
+    state.snake = snake;
+    state.direction = useProvidedInitialState ? initialDirection : directions.RIGHT;
+    state.food = useProvidedInitialState && initialFood
+      ? { ...initialFood }
+      : placeFood(gridSize, snake, random);
+    state.score = 0;
+    state.status = 'ready';
+    hasQueuedTurn = false;
+  }
+
+  reset({ useProvidedInitialState: true });
 
   return {
     state,
+
+    start() {
+      if (state.status !== 'ready') {
+        return false;
+      }
+
+      state.status = 'playing';
+      return true;
+    },
+
+    restart() {
+      if (state.status !== 'game-over') {
+        return false;
+      }
+
+      reset();
+      return true;
+    },
 
     turn(nextDirection) {
       if (
@@ -139,6 +172,30 @@ export function createGame(options = {}) {
       return state;
     },
   };
+}
+
+export function statusMessage(state) {
+  if (state.status === 'ready') {
+    return 'Press Start or Space to play. Use Arrow Keys or WASD to steer.';
+  }
+
+  if (state.status === 'game-over') {
+    return `Game Over — Final Score ${state.score}. Press Restart or Space to play again.`;
+  }
+
+  return 'Playing — use Arrow Keys or WASD';
+}
+
+export function primaryActionLabel(state) {
+  if (state.status === 'game-over') {
+    return 'Restart Game';
+  }
+
+  if (state.status === 'playing') {
+    return 'Playing';
+  }
+
+  return 'Start Game';
 }
 
 const CELL_SIZE = 24;
@@ -188,8 +245,9 @@ function bootstrap() {
   const canvas = document.querySelector('[data-game-canvas]');
   const score = document.querySelector('[data-score]');
   const status = document.querySelector('[data-status]');
+  const action = document.querySelector('[data-game-action]');
 
-  if (!canvas || !score || !status) {
+  if (!canvas || !score || !status || !action) {
     return;
   }
 
@@ -201,13 +259,31 @@ function bootstrap() {
 
   function render() {
     score.textContent = String(game.state.score);
-    status.textContent = game.state.status === 'game-over'
-      ? `Game Over — Score ${game.state.score}`
-      : 'Playing — use Arrow Keys or WASD';
+    status.textContent = statusMessage(game.state);
+    action.textContent = primaryActionLabel(game.state);
+    action.disabled = game.state.status === 'playing';
     drawGame(context, game.state);
   }
 
+  function runPrimaryAction() {
+    if (game.state.status === 'ready') {
+      game.start();
+    } else if (game.state.status === 'game-over') {
+      game.restart();
+      game.start();
+    }
+    render();
+  }
+
+  action.addEventListener('click', runPrimaryAction);
+
   window.addEventListener('keydown', (event) => {
+    if (event.code === 'Space' || event.key === ' ') {
+      event.preventDefault();
+      runPrimaryAction();
+      return;
+    }
+
     const direction = directionFromKey(event.key);
     if (direction) {
       event.preventDefault();
