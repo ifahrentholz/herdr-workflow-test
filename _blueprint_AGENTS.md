@@ -28,15 +28,24 @@ Do NOT wait for further instructions. Do NOT ask "What would you like to do?" �
 
 All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** tool. `agentScope` defaults to `"both"` — project-local agents shadow same-named user agents automatically; you don't need to pass it explicitly.
 
-| Agent          | Role                                                                                              | Tools                   |
-| -------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
-| `orchestrator` | Coordinates workflow, delegates tasks                                                             | read, subagent          |
-| `planner`      | Creates implementation plans from PRD                                                             | read, bash              |
-| `developer`    | Implements features via TDD                                                                       | read, write, edit, bash |
-| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash              |
-| `tester`       | Writes and runs tests                                                                             | read, write, edit, bash |
-| `fixer`        | Fixes reviewer blockers                                                                           | read, write, edit, bash |
-| `submitter`    | Commits, pushes, creates PRs                                                                      | read, bash              |
+Agent runtime settings come from each agent file's YAML frontmatter:
+
+```yaml
+model: openai-codex/gpt-5.5
+thinking: high
+```
+
+The subagent runner passes these through to Pi as `--model <model>` and `--thinking <level>`.
+
+| Agent          | Role                                                                                              | Tools                   | Model                        | Thinking |
+| -------------- | ------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------- | -------- |
+| `orchestrator` | Coordinates workflow, delegates tasks                                                             | read, subagent          | `openai-codex/gpt-5.4-mini` | medium   |
+| `planner`      | Creates implementation plans from PRD                                                             | read, bash              | `openai-codex/gpt-5.5`      | high     |
+| `developer`    | Implements features via TDD                                                                       | read, write, edit, bash | `openai-codex/gpt-5.5`      | medium   |
+| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash              | `openai-codex/gpt-5.5`      | high     |
+| `tester`       | Writes and runs tests                                                                             | read, write, edit, bash | `openai-codex/gpt-5.5`      | medium   |
+| `fixer`        | Fixes reviewer blockers                                                                           | read, write, edit, bash | `openai-codex/gpt-5.5`      | high     |
+| `submitter`    | Commits, pushes, creates PRs                                                                      | read, bash              | `openai-codex/gpt-5.4-mini` | medium   |
 
 ### Invocation Pattern
 
@@ -60,7 +69,7 @@ Do not pass legacy `tasks` or `chain` parameters; they are rejected by the tool.
 Runtime behavior:
 
 - `subagent` starts one ephemeral worker in a Herdr-managed pane.
-- The worker runs `pi --no-session` with the selected role prompt and role tool restrictions.
+- The worker runs `pi --no-session` with the selected role prompt, role tool restrictions, configured model, and configured thinking level.
 - The main agent remains the broker: it starts the worker, sends the task, waits for the worker's `agent_status` (reported by the Herdr pi integration) to reach a terminal state (`done` / `idle`), parses the result, then decides the next workflow step.
 - Completion detection is **event-driven via `agent_status`**, not via text scraping. Workers no longer need to emit a sentinel token — they just finish their turn cleanly.
 - Workers must still emit a final JSON object describing the outcome (see "Subagent JSON envelope" in each role prompt). Their Markdown report goes inside that object's `output` field.
@@ -258,7 +267,7 @@ ALL TASKS DONE
 
 ## Notes
 
-- Subagents are discovered from `.pi/agents/*.md` — edit those files to modify agent behavior.
+- Subagents are discovered from `.pi/agents/*.md` — edit those files to modify agent behavior, model, or thinking level.
 - The `subagent` tool handles Herdr pane lifecycle, prompt delivery, output capture, and result parsing automatically.
 - Never skip the Review gate.
 - Review output should be preserved in the tool result; persist it in `reviews/` only when the active reviewer role has write access.
