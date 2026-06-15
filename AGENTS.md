@@ -1,265 +1,97 @@
-# AGENTS.md — Pi Agent Workflow Rules
+# AGENTS.md — Workflow Rules
 
-> These rules govern how the Pi agent operates in this workspace. Follow them strictly.
+This project uses a script-driven workflow. The agent's job is to invoke the right `wf` command at the right moment and surface its output. **It does NOT orchestrate subagents directly.**
 
----
+## Entry Point
 
-## 🚀 Entry Point — Auto-Start Workflow
+When the user describes a new feature: run `skill:grill-me` → `skill:to-prd` to produce a PRD file. Then:
 
-**When the user describes a new feature, idea, or request → immediately start Phase 1 (grill-me).**
+1. `bash scripts/wf.sh init <prd-path>` — initializes state, detects git host.
+2. For each task in the PRD: `bash scripts/wf.sh task add "<title>"` — auto-creates a GitHub/GitLab issue OR a `docs/tasks/<id>-<slug>.md` file depending on the remote.
+3. `bash scripts/wf.sh next` — drives the current task forward through all phases.
 
-Do NOT wait for further instructions. Do NOT ask "What would you like to do?" — the user's message IS the trigger.
+The agent should prefer slash equivalents when available: `/wf-start`, `/wf-task`, `/wf-next`, `/wf-resume`, `/wf-status`, `/wf-doctor`, `/wf-abort`.
 
-**Exception:** If the user explicitly asks a simple question (e.g., "How do I run tests?"), answer directly without triggering the workflow.
+If the user issues an unrelated, narrow question (e.g. "how do I run the tests?"), answer directly — do NOT enter the workflow.
 
----
+## Golden Rule — Script Owns Orchestration
 
-## ⚠️ Golden Rule — Single Agent Lock
+`scripts/wf.sh` is the orchestrator. It:
 
-**Only ONE agent may work on code at any time.**
+- Runs preflight checks (CLI versions, agent files, git host auth, etc.) **before** spawning anything.
+- Spawns Pi subagents via `pi --no-session -p --system-prompt ... --tools ...`.
+- Streams subagent stdout live, prefixing dimmed lines and highlighting `## PROGRESS:` markers.
+- Parses the final JSON envelope from each subagent and updates `.workflow/state.yaml`.
+- Loops review→fix up to 3 cycles, then hard-stops with `status: blocked`.
 
-- All subagents execute **strictly sequentially** via the `subagent` tool.
-- Wait for a subagent to complete **before** invoking the next one.
-- Do not use legacy `subagent` `parallel`/`tasks` or `chain` modes. The Herdr-native tool is single-mode only.
+Do not spawn additional subagents in parallel. Single-agent-at-a-time is enforced by the script.
 
----
+## Roles
 
-## Available Subagents
+All roles live in `.pi/agents/<role>.md`. They are loaded as system prompts when the script spawns a worker.
 
-All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** tool. `agentScope` defaults to `"both"` — project-local agents shadow same-named user agents automatically; you don't need to pass it explicitly.
+| Role        | Purpose                                | Tools                       |
+| ----------- | -------------------------------------- | --------------------------- |
+| `developer` | TDD implementation                     | `read,write,edit,bash`      |
+| `reviewer`  | Reads diff, classifies PASS/FAIL       | `read,bash` (read-only sub) |
+| `fixer`     | Addresses reviewer blockers            | `read,write,edit,bash`      |
+| `submitter` | Commits + pushes + opens PR/MR         | `read,bash`                 |
+| `tester`    | Optional — adds tests                  | `read,write,edit,bash`      |
+| `planner`   | Optional — turns PRD into task plan    | `read,bash`                 |
 
-| Agent          | Role                                                                                              | Tools                   |
-| -------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
-| `orchestrator` | Coordinates workflow, delegates tasks                                                             | read, subagent          |
-| `planner`      | Creates implementation plans from PRD                                                             | read, bash              |
-| `developer`    | Implements features via TDD                                                                       | read, write, edit, bash |
-| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash              |
-| `tester`       | Writes and runs tests                                                                             | read, write, edit, bash |
-| `fixer`        | Fixes reviewer blockers                                                                           | read, write, edit, bash |
-| `submitter`    | Commits, pushes, creates PRs                                                                      | read, bash              |
+Commit authority: only `submitter` runs `git commit` / `git push` / `gh pr create` / `glab mr create`. All other roles leave changes in the working tree.
 
-### Invocation Pattern
+## Subagent JSON Envelope
 
-`subagent` is intentionally **single-mode only**. Orchestration, sequencing, and review/fix loops happen in the main agent/workflow policy — not inside the tool.
+Every role's prompt ends with a contract: its final non-empty message **must** be a single JSON object:
 
-```
-subagent({
-  agent: "<agent-name>",
-  task: "<clear task description with context>",
-})
-```
-
-Optional parameters:
-
-- `agentScope: "user" | "project" | "both"` — default `"both"`. Use `"user"` to deliberately bypass project agents.
-- `timeoutMs: number` — default 1 200 000 (20 min); clamped to `[10000, 3600000]`.
-- `confirmProjectAgents: boolean` — default `true`. In headless runs (no UI), project agents require either this flag set to `false` OR the environment variable `PI_SUBAGENT_TRUST_PROJECT_AGENTS=1`.
-
-Do not pass legacy `tasks` or `chain` parameters; they are rejected by the tool.
-
-Runtime behavior:
-
-- `subagent` starts one ephemeral worker in a Herdr-managed pane.
-- The worker runs `pi --no-session` with the selected role prompt and role tool restrictions.
-- The main agent remains the broker: it starts the worker, sends the task, waits for the worker's `agent_status` (reported by the Herdr pi integration) to reach a terminal state (`done` / `idle`), parses the result, then decides the next workflow step.
-- Completion detection is **event-driven via `agent_status`**, not via text scraping. Workers no longer need to emit a sentinel token — they just finish their turn cleanly.
-- Workers must still emit a final JSON object describing the outcome (see "Subagent JSON envelope" in each role prompt). Their Markdown report goes inside that object's `output` field.
-- Successful worker panes close automatically.
-- Failed, timed-out, or `blocked` worker panes stay open for debugging.
-- Project-local agent confirmation remains required when configured.
-
-### Commit Authority
-
-**The submitter agent is the only role that creates git commits, pushes, or opens PRs.**
-
-- Developer / fixer / tester leave changes in the working tree (staged or unstaged). They do not run `git commit`, `git push`, or `git tag`.
-- The submitter receives the working-tree state, commits it on the feature branch, pushes, and opens the PR.
-- This keeps the merge boundary explicit: one commit per task, one PR per task, attribution clear.
-
-### Subagent Failure Recovery
-
-A failed `subagent` tool call can mean one of three things — handle each differently rather than blindly retrying:
-
-1. **`agent_status` never reached `done`/`idle` (timeout, 20 min default).**
-   The worker is still alive in its pane. Do NOT spawn a replacement. Instead:
-   - `herdr agent read <runName>` to see what it did.
-   - `herdr agent attach <runName>` to inspect interactively, or `herdr pane run <paneRef> "..."` to nudge it.
-   - If the work is actually complete, the missing signal is a Herdr pi-integration issue (run `herdr integration status` and verify `pi: current`).
-   - If the work is incomplete, decide whether to nudge it forward or close the pane and start fresh.
-
-2. **`agent_status` reached `blocked`.**
-   The worker is waiting for user input the tool cannot provide. Read the pane to see what it asked, then either:
-   - send a reply via `herdr pane run <paneRef> "<answer>"` and let the worker finish, or
-   - close the pane and re-spawn with a clearer task that doesn't trigger the prompt.
-
-3. **Worker emitted `status: "error"` in its final JSON.**
-   The worker considers the task failed for a real reason. Read the `error` and `output` fields in the result. Do NOT auto-retry — surface it to the user or decide on a remediation (different agent, smaller scope, etc.).
-
-The legacy `<<<SUBAGENT_DONE>>>` token is now optional and exists only for human-readable pane scrubbing. Do not include "final-protocol reminders" in task strings — the role system prompt already specifies the JSON envelope.
-
----
-
-## Phase 1 — Design & Grilling
-
-1. Run **`skill:grill-me`** to stress-test the idea with the user.
-2. When grilling is complete → **do NOT start implementing yet.**
-3. Produce a PRD using **`skill:to-prd`**.
-
-### Task Breakdown
-
-After the PRD is written:
-
-- **Ask the user:** _"Should I create GitHub issues in the repo, or inline TODOs in the markdown?"_
-  - **GitHub issues** → use **`skill:to-issues`**
-  - **Inline TODOs** → add `<!-- TODO: ... -->` blocks in the PRD
-
-### Optional: Planning Phase
-
-If the task is complex, delegate planning to the planner agent:
-
-```
-subagent({
-  agent: "planner",
-  task: "Create an implementation plan from this PRD: [include PRD content or path]",
-})
+```json
+{
+  "status": "success" | "error",
+  "summary": "<one-line outcome — reviewer summary MUST start with PASS or FAIL>",
+  "output": "<the full Markdown report as a single string>",
+  "filesChanged": ["..."],   // developer/fixer/submitter
+  "tests": ["..."],           // developer/fixer/tester
+  "notes": "<optional — PR URL, hand-off info>",
+  "error": "<set when status is error>"
+}
 ```
 
----
+The script extracts the last balanced `{...}` block from the worker's stdout. Workers should emit nothing after the envelope.
 
-## Phase 2 — Implementation (Per Task Loop)
+## Progress Markers
 
-Before the FIRST task:
-
-- **Ask the user:** _"Should all tasks run in this main agent, or should I spawn separate agents per task?"_
-  - **Main agent mode** — execute tasks sequentially in this session using TDD directly.
-  - **Spawned agents mode** — delegate each task to a subagent (see below).
-
-### Task Loop — Repeat for Each Task
-
-Each task follows this exact sequence. **Every task must be committed and merged before the next task begins.**
+Workers periodically emit lines of the form:
 
 ```
-┌─ Task N  ──────────────────────────────────────────────────┐
-│                                                            │
-│  1. developer  → implement on feature/<task-name> branch   │
-│       ↓                                                    │
-│  2. reviewer   → review changes                            │
-│       ↓                                                    │
-│  PASS? ───→ 3. submitter → commit + push + create PR       │
-│       ↓                        ↓                           │
-│  FAIL? ──→ fixer → reviewer (loop, max 3 cycles)           │
-│       ↓                                                    │
-│  4. [User merges PR to main]                               │
-│       ↓                                                    │
-│  5. [Next task starts on latest main]                      │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
+## PROGRESS: writing failing test for snake.move()
 ```
 
-#### Step 1: Developer
+The script highlights these lines so the user sees what is happening live.
 
-```
-subagent({
-  agent: "developer",
-  task: "Implement [task description] using TDD on feature/<task-name> branch. PRD context: [summary]",
-})
-```
+## Resume Semantics
 
-#### Step 2: Reviewer
-
-```
-subagent({
-  agent: "reviewer",
-  task: "Review changes on feature/<task-name>. Check against PRD: [summary]. Return findings in your final report; if write access is explicitly granted in the role, also persist them to reviews/<timestamp>-review.md",
-})
-```
-
-#### Step 2b: Fixer (if FAIL)
-
-```
-subagent({
-  agent: "fixer",
-  task: "Fix these blockers from the review: [include reviewer output]",
-})
-```
-
-→ After Fixer completes → go back to **Step 2** (spawn new Reviewer).
-
-**Loop rules:**
-
-- Maximum **3 Review → Fix cycles**. After 3 cycles, escalate to the user.
-- Only when Reviewer returns **PASS (zero blockers)** → proceed to Step 3.
-
-#### Step 3: Submitter
-
-```
-subagent({
-  agent: "submitter",
-  task: "Commit changes, push to feature/<task-name>, and create a PR to main. PRD reference: [summary]",
-})
-```
-
-#### Step 4: Merge to Main
-
-**The Submitter creates the PR. The user merges it to main.**
-
-After the user confirms the PR is merged → **next task starts on latest main.**
-
-> **Why this matters:** Each task builds on the previous task's merged code. Skipping the merge step means the next task works on stale code and will cause conflicts.
-
-### TDD Rule
-
-Every implementation follows **Test-Driven Development**:
-
-- Use **`skill:tdd`** for all feature work (main agent mode).
-- Developer agent always uses TDD (enforced in its system prompt).
-- Red → Green → Refactor. No exceptions.
-- If no test infrastructure exists, scaffold it first.
-
----
-
-## Blocker vs Nit
-
-| Severity    | Definition                                                        | Action                         |
-| ----------- | ----------------------------------------------------------------- | ------------------------------ |
-| **Blocker** | Code incorrect, tests fail, spec mismatch, missing error handling | Must be fixed before sign-off  |
-| **Nit**     | Style preference, minor naming, cosmetic                          | Document in review, no re-work |
-
----
-
-## Workflow Summary
-
-```
-USER: "I want to build X"
-  ↓
-[Auto-start]
-  ↓
-grill-me → to-prd → ask: issues or todos? → to-issues (if yes)
-  ↓
-ask: main agent or spawned agents?
-  ↓
-FOR EACH TASK:
-  developer (TDD) → reviewer → (fixer → reviewer)* → submitter → [merge to main]
-  ↓
-ALL TASKS DONE
-```
-
----
+`bash scripts/wf.sh resume` is **task-level**: it identifies which task is in flight (or which planned task is next) and tells the user to run `wf next`. Half-finished subagent runs are not resumed — the next `wf next` restarts the current phase from scratch on the same branch.
 
 ## Git Workflow
 
-- Each task works on **`feature/<task-name>`** branch.
-- Review Gate happens on the feature branch.
-- Submitter creates PR to `main`.
-- User merges PR → next task starts on latest `main`.
-- Never skip the merge step between tasks.
+- Each task → branch `feature/<slug>` cut from the latest default branch.
+- Submitter commits + pushes; opens PR/MR via the detected host CLI.
+- For `host: none`, submitter commits locally only — the user merges with `git merge --no-ff`.
+- A task is `merged_pending` until its branch is reachable from the default branch; the next `wf next` flips it to `merged`.
 
----
+## Eskalation
+
+After 3 failed review→fix cycles the script writes `status: blocked` with a `blocked_reason`, dumps the last review envelope, and exits non-zero. The agent must report this to the user — no autonomous further attempts.
+
+## Troubleshooting
+
+- `bash scripts/wf.sh doctor` — runs every preflight check at once.
+- `.workflow/runs/` — per-run logs (timestamped, role-named).
+- `.workflow/state.yaml` — single source of truth for the cursor.
 
 ## Notes
 
-- Subagents are discovered from `.pi/agents/*.md` — edit those files to modify agent behavior.
-- The `subagent` tool handles Herdr pane lifecycle, prompt delivery, output capture, and result parsing automatically.
-- Never skip the Review gate.
-- Review output should be preserved in the tool result; persist it in `reviews/` only when the active reviewer role has write access.
-- **Every task ends with a merged PR** — this ensures each task builds on verified, merged code.
+- Subagent definitions in `.pi/agents/*.md` — edit them to tune role behavior.
+- Skills `grill-me`, `to-prd`, `tdd` remain user-level Pi skills; this workflow calls them from the agent's main loop, not from the script.
+- Never edit `.workflow/state.yaml` by hand while a task is in flight — use `wf task` subcommands.

@@ -8,3 +8,7 @@
 
 # Node
 node_modules/
+
+# wf workflow — live state + per-run logs (state.yaml.example documents the schema)
+.workflow/state.yaml
+.workflow/runs/
