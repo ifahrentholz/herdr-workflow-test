@@ -166,6 +166,13 @@ export function createGame(options = {}) {
     state.moveDelayMs = moveDelayMsForScore(state.score);
   }
 
+  function updateHighscoreIfBeaten() {
+    if (state.score > state.highscore) {
+      state.highscore = state.score;
+      highscoreStore.save(state.highscore);
+    }
+  }
+
   function reset({ useProvidedInitialState = false } = {}) {
     const snake = cloneCells(useProvidedInitialState ? initialSnake : defaultSnake(gridSize));
     state.snake = snake;
@@ -234,6 +241,7 @@ export function createGame(options = {}) {
 
       if (collisionBody.some((segment) => sameCell(segment, head))) {
         state.status = 'game-over';
+        updateHighscoreIfBeaten();
         return state;
       }
 
@@ -242,10 +250,7 @@ export function createGame(options = {}) {
       if (isEating) {
         state.score += 1;
         updateSpeed();
-        if (state.score > state.highscore) {
-          state.highscore = state.score;
-          highscoreStore.save(state.highscore);
-        }
+        updateHighscoreIfBeaten();
         state.food = placeFood(gridSize, state.snake, random);
       } else {
         state.snake.pop();
