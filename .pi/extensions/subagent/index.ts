@@ -26,7 +26,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
-import { buildPromptRunArgs } from "./broker.ts";
 import {
 	buildWorkerStartArgs,
 	chooseSplitDirection,
@@ -355,7 +354,12 @@ async function runHerdrAgent(options: {
 		const splitDirection = chooseSplitDirection({ paneCount, columns, rows });
 		detailsBase.splitDirection = splitDirection;
 
-		const piArgs = buildPiArgs(options.agent, tmpPromptPath ?? undefined);
+		const workerPrompt = buildWorkerPrompt(options.agent.name, options.task);
+		// Pass the delegated task as Pi's initial message instead of injecting it
+		// with `herdr pane run` after spawn. `agent start` only guarantees the
+		// pane/process exists; Pi's TUI editor may not yet be ready to submit, which
+		// can leave the prompt visibly inserted but not sent.
+		const piArgs = buildPiArgs(options.agent, tmpPromptPath ?? undefined, workerPrompt);
 		const start = await runHerdr(
 			buildWorkerStartArgs({ runName, cwd, piArgs, split: splitDirection }),
 			{ cwd, signal: options.signal },
@@ -375,9 +379,7 @@ async function runHerdrAgent(options: {
 			`Spawned ${runName} in Herdr pane ${paneRef} (split:${splitDirection}${workspaceId ? `, workspace ${workspaceId}` : ""}, panes:${paneCount}).`,
 		);
 
-		const workerPrompt = buildWorkerPrompt(options.agent.name, options.task);
-		await runHerdr(buildPromptRunArgs(paneRef, workerPrompt), { cwd, signal: options.signal });
-		emit("prompted", `Prompt sent to ${runName}; waiting for agent_status to reach done/idle (timeout ${Math.round(timeoutMs / 60_000)} min).`);
+		emit("prompted", `Prompt delivered to ${runName} as Pi's initial message; waiting for agent_status to reach done/idle (timeout ${Math.round(timeoutMs / 60_000)} min).`);
 
 		const { status: terminalStatus } = await waitForCompletion(paneRef, timeoutMs, options.signal, (current) => {
 			emit("waiting", `Waiting for ${runName} (current agent_status: ${current ?? "unknown"})...`, { agentStatus: current ?? undefined });

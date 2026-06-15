@@ -27,6 +27,13 @@ test("makePiCommand builds an interactive pi command from args", () => {
 	);
 });
 
+test("makePiCommand safely carries multiline initial prompts", () => {
+	assert.equal(
+		makePiCommand(["--no-session", "line 1\nline 2 with 'quote'"]),
+		"pi '--no-session' 'line 1\nline 2 with '\\''quote'\\'''",
+	);
+});
+
 test("buildWorkerStartArgs defaults to right-split and no-focus", () => {
 	const args = buildWorkerStartArgs({
 		runName: "developer-abc123",

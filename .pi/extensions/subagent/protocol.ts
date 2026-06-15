@@ -67,11 +67,12 @@ export function validateSingleModeParams(params: SingleModeParams): string | nul
 	return null;
 }
 
-export function buildPiArgs(agent: { model?: string; tools?: string[] }, systemPromptPath?: string): string[] {
+export function buildPiArgs(agent: { model?: string; tools?: string[] }, systemPromptPath?: string, initialMessage?: string): string[] {
 	const args = ["--no-session"];
 	if (agent.model) args.push("--model", agent.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 	if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
+	if (initialMessage) args.push(initialMessage);
 	return args;
 }
 
