@@ -4,6 +4,8 @@ import {
   createHighscoreStore,
   directions,
   directionFromKey,
+  moveDelayMsForScore,
+  movesPerSecondForScore,
   primaryActionLabel,
   statusMessage,
 } from '../app.js';
@@ -152,6 +154,54 @@ describe('snake game core', () => {
     game.step();
 
     expect(game.state.snake[0]).toEqual({ x: 0, y: 10 });
+  });
+
+  it('calculates gradual speed progression every 5 points up to a capped maximum', () => {
+    expect(movesPerSecondForScore(0)).toBeCloseTo(7);
+    expect(movesPerSecondForScore(4)).toBeCloseTo(7);
+    expect(movesPerSecondForScore(5)).toBeCloseTo(8);
+    expect(movesPerSecondForScore(10)).toBeCloseTo(9);
+    expect(movesPerSecondForScore(35)).toBeCloseTo(14);
+    expect(movesPerSecondForScore(100)).toBeCloseTo(14);
+
+    expect(moveDelayMsForScore(0)).toBeCloseTo(1000 / 7);
+    expect(moveDelayMsForScore(35)).toBeCloseTo(1000 / 14);
+  });
+
+  it('exposes current speed in game state and resets it when a new game starts', () => {
+    const game = createGame({
+      random: () => 0,
+      initialSnake: [
+        { x: 10, y: 10 },
+        { x: 9, y: 10 },
+        { x: 8, y: 10 },
+      ],
+      initialFood: { x: 11, y: 10 },
+    });
+
+    expect(game.state.movesPerSecond).toBeCloseTo(7);
+    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 7);
+
+    game.start();
+    for (let score = 0; score < 5; score += 1) {
+      const nextHead = {
+        x: (game.state.snake[0].x + game.state.direction.x + game.state.gridSize) % game.state.gridSize,
+        y: (game.state.snake[0].y + game.state.direction.y + game.state.gridSize) % game.state.gridSize,
+      };
+      game.state.food = nextHead;
+      game.step();
+    }
+
+    expect(game.state.score).toBe(5);
+    expect(game.state.movesPerSecond).toBeCloseTo(8);
+    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 8);
+
+    game.state.status = 'game-over';
+    expect(game.restart()).toBe(true);
+
+    expect(game.state.score).toBe(0);
+    expect(game.state.movesPerSecond).toBeCloseTo(7);
+    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 7);
   });
 
   it('eats food, grows, increments score, and places the next food on a free cell', () => {
