@@ -25,6 +25,19 @@ export function directionFromKey(key) {
 }
 
 const HIGHSCORE_KEY = 'snakeHighscore';
+const START_MOVES_PER_SECOND = 7;
+const MAX_MOVES_PER_SECOND = 14;
+const SCORE_PER_SPEED_INCREASE = 5;
+
+export function movesPerSecondForScore(score) {
+  const safeScore = Number.isSafeInteger(score) && score > 0 ? score : 0;
+  const speedIncreases = Math.floor(safeScore / SCORE_PER_SPEED_INCREASE);
+  return Math.min(START_MOVES_PER_SECOND + speedIncreases, MAX_MOVES_PER_SECOND);
+}
+
+export function moveDelayMsForScore(score) {
+  return 1000 / movesPerSecondForScore(score);
+}
 
 function safeBrowserStorage() {
   try {
@@ -138,9 +151,16 @@ export function createGame(options = {}) {
     direction: directions.RIGHT,
     food: null,
     score: 0,
+    movesPerSecond: movesPerSecondForScore(0),
+    moveDelayMs: moveDelayMsForScore(0),
     highscore: highscoreStore.load(),
     status: 'ready',
   };
+
+  function updateSpeed() {
+    state.movesPerSecond = movesPerSecondForScore(state.score);
+    state.moveDelayMs = moveDelayMsForScore(state.score);
+  }
 
   function reset({ useProvidedInitialState = false } = {}) {
     const snake = cloneCells(useProvidedInitialState ? initialSnake : defaultSnake(gridSize));
@@ -150,6 +170,7 @@ export function createGame(options = {}) {
       ? { ...initialFood }
       : placeFood(gridSize, snake, random);
     state.score = 0;
+    updateSpeed();
     state.status = 'ready';
     hasQueuedTurn = false;
   }
@@ -212,6 +233,7 @@ export function createGame(options = {}) {
 
       if (isEating) {
         state.score += 1;
+        updateSpeed();
         if (state.score > state.highscore) {
           state.highscore = state.score;
           highscoreStore.save(state.highscore);
@@ -251,7 +273,6 @@ export function primaryActionLabel(state) {
 }
 
 const CELL_SIZE = 24;
-const TICK_MS = 140;
 
 function drawGame(context, state) {
   const canvasSize = state.gridSize * CELL_SIZE;
@@ -346,11 +367,16 @@ function bootstrap() {
     }
   });
 
+  function scheduleNextTick() {
+    window.setTimeout(() => {
+      game.step();
+      render();
+      scheduleNextTick();
+    }, game.state.moveDelayMs);
+  }
+
   render();
-  window.setInterval(() => {
-    game.step();
-    render();
-  }, TICK_MS);
+  scheduleNextTick();
 }
 
 if (typeof window !== 'undefined') {
