@@ -24,6 +24,52 @@ export function directionFromKey(key) {
   return KEY_DIRECTIONS.get(key) ?? null;
 }
 
+const HIGHSCORE_KEY = 'snakeHighscore';
+
+function safeBrowserStorage() {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function createHighscoreStore(storage = safeBrowserStorage()) {
+  return {
+    load() {
+      if (!storage) {
+        return 0;
+      }
+
+      try {
+        const storedValue = storage.getItem(HIGHSCORE_KEY);
+        const parsedValue = Number(storedValue);
+
+        if (!Number.isSafeInteger(parsedValue) || parsedValue < 0) {
+          return 0;
+        }
+
+        return parsedValue;
+      } catch {
+        return 0;
+      }
+    },
+
+    save(score) {
+      if (!storage || !Number.isSafeInteger(score) || score < 0) {
+        return false;
+      }
+
+      try {
+        storage.setItem(HIGHSCORE_KEY, String(score));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 function sameCell(a, b) {
   return a.x === b.x && a.y === b.y;
 }
@@ -82,6 +128,7 @@ export function createGame(options = {}) {
   const initialSnake = cloneCells(options.initialSnake ?? defaultSnake(gridSize));
   const initialDirection = options.initialDirection ?? directions.RIGHT;
   const initialFood = options.initialFood ? { ...options.initialFood } : null;
+  const highscoreStore = options.highscoreStore ?? createHighscoreStore();
 
   let hasQueuedTurn = false;
 
@@ -91,6 +138,7 @@ export function createGame(options = {}) {
     direction: directions.RIGHT,
     food: null,
     score: 0,
+    highscore: highscoreStore.load(),
     status: 'ready',
   };
 
@@ -164,6 +212,10 @@ export function createGame(options = {}) {
 
       if (isEating) {
         state.score += 1;
+        if (state.score > state.highscore) {
+          state.highscore = state.score;
+          highscoreStore.save(state.highscore);
+        }
         state.food = placeFood(gridSize, state.snake, random);
       } else {
         state.snake.pop();
@@ -244,10 +296,11 @@ function drawGame(context, state) {
 function bootstrap() {
   const canvas = document.querySelector('[data-game-canvas]');
   const score = document.querySelector('[data-score]');
+  const highscore = document.querySelector('[data-highscore]');
   const status = document.querySelector('[data-status]');
   const action = document.querySelector('[data-game-action]');
 
-  if (!canvas || !score || !status || !action) {
+  if (!canvas || !score || !highscore || !status || !action) {
     return;
   }
 
@@ -259,6 +312,7 @@ function bootstrap() {
 
   function render() {
     score.textContent = String(game.state.score);
+    highscore.textContent = String(game.state.highscore);
     status.textContent = statusMessage(game.state);
     action.textContent = primaryActionLabel(game.state);
     action.disabled = game.state.status === 'playing';

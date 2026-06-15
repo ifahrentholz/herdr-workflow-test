@@ -1,7 +1,89 @@
 import { describe, expect, it } from 'vitest';
-import { createGame, directions, directionFromKey, statusMessage, primaryActionLabel } from '../app.js';
+import {
+  createGame,
+  createHighscoreStore,
+  directions,
+  directionFromKey,
+  primaryActionLabel,
+  statusMessage,
+} from '../app.js';
 
 const alwaysFirstFreeCell = () => 0;
+
+function memoryStorage(initialEntries = {}) {
+  const entries = new Map(Object.entries(initialEntries));
+
+  return {
+    getItem(key) {
+      return entries.has(key) ? entries.get(key) : null;
+    },
+    setItem(key, value) {
+      entries.set(key, String(value));
+    },
+  };
+}
+
+describe('highscore storage', () => {
+  it('loads a valid stored highscore and exposes it in new game state', () => {
+    const store = createHighscoreStore(memoryStorage({ snakeHighscore: '12' }));
+    const game = createGame({ random: alwaysFirstFreeCell, highscoreStore: store });
+
+    expect(store.load()).toBe(12);
+    expect(game.state.highscore).toBe(12);
+  });
+
+  it('treats missing, invalid, negative, fractional, and unsafe stored highscores as zero', () => {
+    expect(createHighscoreStore(memoryStorage()).load()).toBe(0);
+    expect(createHighscoreStore(memoryStorage({ snakeHighscore: 'not-a-score' })).load()).toBe(0);
+    expect(createHighscoreStore(memoryStorage({ snakeHighscore: '-3' })).load()).toBe(0);
+    expect(createHighscoreStore(memoryStorage({ snakeHighscore: '1.5' })).load()).toBe(0);
+    expect(createHighscoreStore(memoryStorage({ snakeHighscore: '9007199254740992' })).load()).toBe(0);
+  });
+
+  it('falls back safely when browser storage throws', () => {
+    const throwingStorage = {
+      getItem() {
+        throw new Error('storage disabled');
+      },
+      setItem() {
+        throw new Error('storage disabled');
+      },
+    };
+    const store = createHighscoreStore(throwingStorage);
+
+    expect(store.load()).toBe(0);
+    expect(store.save(5)).toBe(false);
+  });
+
+  it('updates and persists highscore only when score beats the current best', () => {
+    const storage = memoryStorage({ snakeHighscore: '2' });
+    const game = createGame({
+      random: () => 0,
+      highscoreStore: createHighscoreStore(storage),
+      initialSnake: [
+        { x: 10, y: 10 },
+        { x: 9, y: 10 },
+        { x: 8, y: 10 },
+      ],
+      initialFood: { x: 11, y: 10 },
+    });
+
+    game.start();
+    game.step();
+
+    expect(game.state.score).toBe(1);
+    expect(game.state.highscore).toBe(2);
+    expect(storage.getItem('snakeHighscore')).toBe('2');
+
+    game.state.score = 2;
+    game.state.food = { x: 12, y: 10 };
+    game.step();
+
+    expect(game.state.score).toBe(3);
+    expect(game.state.highscore).toBe(3);
+    expect(storage.getItem('snakeHighscore')).toBe('3');
+  });
+});
 
 describe('snake game core', () => {
   it('initializes a 20x20 board in the ready state with a centered snake, free-cell food, and zero score', () => {
