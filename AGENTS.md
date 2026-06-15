@@ -28,15 +28,15 @@ Do NOT wait for further instructions. Do NOT ask "What would you like to do?" �
 
 All agents are defined in `.pi/agents/*.md` and invoked via the **`subagent`** tool. `agentScope` defaults to `"both"` — project-local agents shadow same-named user agents automatically; you don't need to pass it explicitly.
 
-| Agent          | Role                                  | Tools                |
-| -------------- | ------------------------------------- | -------------------- |
-| `orchestrator` | Coordinates workflow, delegates tasks | read, subagent       |
-| `planner`      | Creates implementation plans from PRD | read, bash           |
-| `developer`    | Implements features via TDD           | read, write, edit, bash |
-| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash |
-| `tester`       | Writes and runs tests                 | read, write, edit, bash |
-| `fixer`        | Fixes reviewer blockers               | read, write, edit, bash |
-| `submitter`    | Commits, pushes, creates PRs          | read, bash           |
+| Agent          | Role                                                                                              | Tools                   |
+| -------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
+| `orchestrator` | Coordinates workflow, delegates tasks                                                             | read, subagent          |
+| `planner`      | Creates implementation plans from PRD                                                             | read, bash              |
+| `developer`    | Implements features via TDD                                                                       | read, write, edit, bash |
+| `reviewer`     | Code review — finds blockers (bash is read-only by prompt; tool-level sandbox tracked separately) | read, bash              |
+| `tester`       | Writes and runs tests                                                                             | read, write, edit, bash |
+| `fixer`        | Fixes reviewer blockers                                                                           | read, write, edit, bash |
+| `submitter`    | Commits, pushes, creates PRs                                                                      | read, bash              |
 
 ### Invocation Pattern
 
