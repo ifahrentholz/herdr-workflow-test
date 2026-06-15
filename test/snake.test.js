@@ -89,6 +89,31 @@ describe('highscore storage', () => {
     expect(game.state.highscore).toBe(3);
     expect(storage.getItem('snakeHighscore')).toBe('3');
   });
+
+  it('persists a beaten highscore when a run ends', () => {
+    const storage = memoryStorage({ snakeHighscore: '2' });
+    const game = createGame({
+      random: alwaysFirstFreeCell,
+      highscoreStore: createHighscoreStore(storage),
+      initialSnake: [
+        { x: 5, y: 5 },
+        { x: 5, y: 6 },
+        { x: 4, y: 6 },
+        { x: 4, y: 5 },
+        { x: 3, y: 5 },
+      ],
+      initialDirection: directions.UP,
+    });
+
+    game.state.score = 4;
+    game.start();
+    game.turn(directions.LEFT);
+    game.step();
+
+    expect(game.state.status).toBe('game-over');
+    expect(game.state.highscore).toBe(4);
+    expect(storage.getItem('snakeHighscore')).toBe('4');
+  });
 });
 
 describe('snake game core', () => {
