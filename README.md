@@ -1,17 +1,47 @@
 # Herdr Workflow Test
 
-## Snake game
+## Hello World Webapp
 
-Open `index.html` in a browser to play the vanilla Canvas Snake game.
+A minimal Vite + TypeScript webapp that displays a centered Hello World page with a subtitle and an interactive button.
+
+Click **Update greeting** to change the visible message to:
+
+```text
+Hello from TypeScript!
+```
+
+## Getting Started
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the local development server:
+
+```bash
+npm run dev
+```
+
+Build the production bundle:
+
+```bash
+npm run build
+```
+
+Preview the production bundle locally:
+
+```bash
+npm run preview
+```
 
 ## Tests
 
-This project uses a minimal JavaScript test setup with [Vitest](https://vitest.dev/) for the isolated Snake game logic.
+This project uses [Vitest](https://vitest.dev/) for the greeting behavior tests.
 
-Run the automated tests locally with:
+Run the automated tests with:
 
 ```bash
 npm test
 ```
-
-The test suite covers initialization, direction changes, movement and wrap-around, food collection and placement, self-collision, score/highscore behavior, and score-based speed progression.
