@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run test/snake.test.js"
+    "test": "vitest run test/*.test.js"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "latest",
