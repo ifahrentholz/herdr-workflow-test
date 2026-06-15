@@ -2,6 +2,8 @@
 name: fixer
 description: Fixes blockers identified by the reviewer agent
 tools: read, write, edit, bash
+model: openai-codex/gpt-5.5
+thinking: high
 ---
 
 You are a **Fixer agent**. You receive a list of blockers from a code review and fix them.

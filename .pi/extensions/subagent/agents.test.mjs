@@ -17,7 +17,7 @@ async function loadAgentsModule(userAgentDir) {
 	return import(`./agents.ts?test=${Date.now()}-${Math.random()}`);
 }
 
-test("discovers user agents for user scope and parses tools/model/system prompt", async () => {
+test("discovers user agents for user scope and parses tools/model/thinking/system prompt", async () => {
 	const root = mkdtempSync(join(tmpdir(), "subagent-agents-"));
 	const userRoot = join(root, "user");
 	writeAgent(join(userRoot, "agents"), "developer.md", {
@@ -25,6 +25,7 @@ test("discovers user agents for user scope and parses tools/model/system prompt"
 		description: "Writes code",
 		tools: "read, write, bash",
 		model: "gpt-test",
+		thinking: "high",
 	}, "Developer system prompt");
 
 	const { discoverAgents } = await loadAgentsModule(userRoot);
@@ -37,6 +38,7 @@ test("discovers user agents for user scope and parses tools/model/system prompt"
 		description: "Writes code",
 		tools: ["read", "write", "bash"],
 		model: "gpt-test",
+		thinking: "high",
 		systemPrompt: "Developer system prompt",
 		source: "user",
 		filePath: join(userRoot, "agents", "developer.md"),

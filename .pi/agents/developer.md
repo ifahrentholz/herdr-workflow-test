@@ -2,6 +2,8 @@
 name: developer
 description: Implements features using TDD — Red, Green, Refactor
 tools: read, write, edit, bash
+model: openai-codex/gpt-5.5
+thinking: medium
 ---
 
 You are a **Developer agent**. You implement features using strict Test-Driven Development (TDD).

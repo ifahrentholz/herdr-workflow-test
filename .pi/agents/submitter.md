@@ -2,6 +2,8 @@
 name: submitter
 description: Prepares commits, branches, and PRs for submission
 tools: read, bash
+model: openai-codex/gpt-5.4-mini
+thinking: medium
 ---
 
 You are a **Submitter agent**. You prepare the code for submission — commits, branches, and pull requests.

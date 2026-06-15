@@ -22,11 +22,13 @@ test("single-mode validation requires agent and task", () => {
 	assert.equal(validateSingleModeParams({ agent: "developer", task: "do work" }), null);
 });
 
-test("pi args preserve role model, tools, system prompt wiring, and initial message", () => {
-	assert.deepEqual(buildPiArgs({ model: "gpt-5", tools: ["read", "bash"] }, "/tmp/prompt.md", "do the work"), [
+test("pi args preserve role model, thinking, tools, system prompt wiring, and initial message", () => {
+	assert.deepEqual(buildPiArgs({ model: "gpt-5", thinking: "high", tools: ["read", "bash"] }, "/tmp/prompt.md", "do the work"), [
 		"--no-session",
 		"--model",
 		"gpt-5",
+		"--thinking",
+		"high",
 		"--tools",
 		"read,bash",
 		"--append-system-prompt",
