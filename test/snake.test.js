@@ -10,6 +10,7 @@ import {
 import {
   gameFlowScreen,
   isStartOrRestartKey,
+  foodOrbPresentation,
   primaryActionLabel,
   statusMessage,
 } from '../app.js';
@@ -425,5 +426,28 @@ describe('snake game core', () => {
     expect(isStartOrRestartKey({ code: 'Space', key: ' ' })).toBe(true);
     expect(isStartOrRestartKey({ code: '', key: ' ' })).toBe(true);
     expect(isStartOrRestartKey({ code: 'KeyW', key: 'w' })).toBe(false);
+  });
+
+  it('calculates a bounded pulsing neon food orb presentation', () => {
+    expect(foodOrbPresentation(0, 24)).toEqual({
+      centerOffset: 12,
+      radius: 6,
+      glowRadius: 10,
+      glowAlpha: 0.55,
+    });
+
+    expect(foodOrbPresentation(250, 24)).toEqual({
+      centerOffset: 12,
+      radius: 8,
+      glowRadius: 14,
+      glowAlpha: 0.85,
+    });
+
+    expect(foodOrbPresentation(750, 24)).toEqual({
+      centerOffset: 12,
+      radius: 4,
+      glowRadius: 6,
+      glowAlpha: 0.25,
+    });
   });
 });

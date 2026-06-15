@@ -64,16 +64,66 @@ export function primaryActionLabel(state) {
 }
 
 const CELL_SIZE = 24;
+const CYBERPUNK_PALETTE = Object.freeze({
+  background: '#050014',
+  grid: 'rgba(98, 0, 255, 0.18)',
+  gridStrong: 'rgba(0, 245, 255, 0.2)',
+  snakeHead: '#00f5ff',
+  snakeBody: '#9b5cff',
+  snakeCore: '#f5fbff',
+  food: '#ff2bd6',
+  foodCore: '#fff0fb',
+});
 
-function drawGame(context, state) {
+export function foodOrbPresentation(timeMs, cellSize = CELL_SIZE) {
+  const pulse = Math.sin((timeMs / 1000) * Math.PI * 2);
+  const radius = Math.round(cellSize * 0.25 + pulse * cellSize * (1 / 12));
+  const glowRadius = Math.round(cellSize * (5 / 12) + pulse * cellSize * (1 / 6));
+  const glowAlpha = Math.round((0.55 + pulse * 0.3) * 100) / 100;
+
+  return {
+    centerOffset: cellSize / 2,
+    radius,
+    glowRadius,
+    glowAlpha,
+  };
+}
+
+function drawRoundedCell(context, x, y, size, radius) {
+  context.beginPath();
+  if (typeof context.roundRect === 'function') {
+    context.roundRect(x, y, size, size, radius);
+  } else {
+    context.moveTo(x + radius, y);
+    context.lineTo(x + size - radius, y);
+    context.quadraticCurveTo(x + size, y, x + size, y + radius);
+    context.lineTo(x + size, y + size - radius);
+    context.quadraticCurveTo(x + size, y + size, x + size - radius, y + size);
+    context.lineTo(x + radius, y + size);
+    context.quadraticCurveTo(x, y + size, x, y + size - radius);
+    context.lineTo(x, y + radius);
+    context.quadraticCurveTo(x, y, x + radius, y);
+  }
+  context.fill();
+}
+
+function drawGame(context, state, timeMs = 0) {
   const canvasSize = state.gridSize * CELL_SIZE;
-  context.fillStyle = '#071108';
+  const backgroundGradient = context.createLinearGradient(0, 0, canvasSize, canvasSize);
+  backgroundGradient.addColorStop(0, '#050014');
+  backgroundGradient.addColorStop(0.55, '#07051f');
+  backgroundGradient.addColorStop(1, '#130022');
+  context.fillStyle = backgroundGradient;
   context.fillRect(0, 0, canvasSize, canvasSize);
 
-  context.strokeStyle = 'rgba(85, 255, 107, 0.08)';
+  context.save();
+  context.strokeStyle = CYBERPUNK_PALETTE.grid;
   context.lineWidth = 1;
+  context.shadowColor = '#00f5ff';
+  context.shadowBlur = 3;
   for (let line = 0; line <= state.gridSize; line += 1) {
     const position = line * CELL_SIZE + 0.5;
+    context.strokeStyle = line % 5 === 0 ? CYBERPUNK_PALETTE.gridStrong : CYBERPUNK_PALETTE.grid;
     context.beginPath();
     context.moveTo(position, 0);
     context.lineTo(position, canvasSize);
@@ -83,25 +133,43 @@ function drawGame(context, state) {
     context.lineTo(canvasSize, position);
     context.stroke();
   }
+  context.restore();
 
   if (state.food) {
-    context.fillStyle = '#ff3b30';
-    context.fillRect(
-      state.food.x * CELL_SIZE + 3,
-      state.food.y * CELL_SIZE + 3,
-      CELL_SIZE - 6,
-      CELL_SIZE - 6,
-    );
+    const orb = foodOrbPresentation(timeMs, CELL_SIZE);
+    const centerX = state.food.x * CELL_SIZE + orb.centerOffset;
+    const centerY = state.food.y * CELL_SIZE + orb.centerOffset;
+    const foodGradient = context.createRadialGradient(centerX, centerY, 1, centerX, centerY, orb.glowRadius);
+    foodGradient.addColorStop(0, CYBERPUNK_PALETTE.foodCore);
+    foodGradient.addColorStop(0.34, CYBERPUNK_PALETTE.food);
+    foodGradient.addColorStop(1, `rgba(255, 43, 214, ${orb.glowAlpha})`);
+
+    context.save();
+    context.shadowColor = CYBERPUNK_PALETTE.food;
+    context.shadowBlur = 18;
+    context.fillStyle = foodGradient;
+    context.beginPath();
+    context.arc(centerX, centerY, orb.radius, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
   }
 
   state.snake.forEach((segment, index) => {
-    context.fillStyle = index === 0 ? '#9dff7a' : '#35d04f';
-    context.fillRect(
-      segment.x * CELL_SIZE + 2,
-      segment.y * CELL_SIZE + 2,
-      CELL_SIZE - 4,
-      CELL_SIZE - 4,
-    );
+    const inset = index === 0 ? 2 : 3;
+    const size = CELL_SIZE - inset * 2;
+    const x = segment.x * CELL_SIZE + inset;
+    const y = segment.y * CELL_SIZE + inset;
+
+    context.save();
+    context.shadowColor = index === 0 ? CYBERPUNK_PALETTE.snakeHead : CYBERPUNK_PALETTE.snakeBody;
+    context.shadowBlur = index === 0 ? 18 : 12;
+    context.fillStyle = index === 0 ? CYBERPUNK_PALETTE.snakeHead : CYBERPUNK_PALETTE.snakeBody;
+    drawRoundedCell(context, x, y, size, 6);
+
+    context.shadowBlur = 0;
+    context.fillStyle = index === 0 ? CYBERPUNK_PALETTE.snakeCore : 'rgba(255, 255, 255, 0.22)';
+    drawRoundedCell(context, x + size * 0.22, y + size * 0.22, size * 0.28, 3);
+    context.restore();
   });
 }
 
@@ -142,7 +210,8 @@ function bootstrap() {
       flowInstruction.textContent = flowScreen.instruction;
     }
 
-    drawGame(context, game.state);
+    const timeMs = typeof performance === 'undefined' ? 0 : performance.now();
+    drawGame(context, game.state, timeMs);
   }
 
   function runPrimaryAction() {
