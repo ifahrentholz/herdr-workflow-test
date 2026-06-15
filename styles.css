@@ -73,15 +73,54 @@ h1 {
   white-space: nowrap;
 }
 
+.game-board-frame {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto 16px;
+}
+
 canvas {
   display: block;
   width: 100%;
-  max-width: 480px;
   aspect-ratio: 1;
-  margin: 0 auto 16px;
   border: 3px solid #35d04f;
   background: #071108;
   image-rendering: pixelated;
+}
+
+.flow-overlay {
+  position: absolute;
+  inset: 3px;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  padding: 28px;
+  background: rgba(2, 5, 2, 0.86);
+  border: 1px solid rgba(85, 255, 107, 0.7);
+  color: #d8ffd0;
+  text-align: center;
+}
+
+.flow-overlay[hidden] {
+  display: none;
+}
+
+.flow-overlay h2,
+.flow-overlay p {
+  margin: 0;
+}
+
+.flow-overlay h2 {
+  color: #55ff6b;
+  font-size: clamp(1.7rem, 6vw, 3rem);
+  text-transform: uppercase;
+  text-shadow: 0 0 14px rgba(85, 255, 107, 0.65);
+}
+
+.flow-overlay p:last-child {
+  color: #9dff7a;
+  font-weight: 700;
 }
 
 .controls {

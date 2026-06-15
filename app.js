@@ -2,14 +2,53 @@ import { createGame, directionFromKey } from './snake-core.js';
 
 export function statusMessage(state) {
   if (state.status === 'ready') {
-    return 'Press Start or Space to play. Use Arrow Keys or WASD to steer.';
+    return 'Press Enter or Space to start. Use Arrow Keys or WASD to steer.';
   }
 
   if (state.status === 'game-over') {
-    return `Game Over — Final Score ${state.score}. Press Restart or Space to play again.`;
+    return `Game Over — Final Score ${state.score}. Press Enter or Space to restart.`;
   }
 
   return 'Playing — use Arrow Keys or WASD';
+}
+
+export function gameFlowScreen(state) {
+  if (state.status === 'ready') {
+    return {
+      screen: 'start',
+      title: 'Ready to play?',
+      message: 'Use Arrow Keys or WASD to steer the snake.',
+      instruction: 'Press Enter or Space to start.',
+      isOverlayVisible: true,
+    };
+  }
+
+  if (state.status === 'game-over') {
+    return {
+      screen: 'game-over',
+      title: 'Game Over',
+      message: `Final Score: ${state.score}`,
+      instruction: 'Press Enter or Space to restart.',
+      isOverlayVisible: true,
+    };
+  }
+
+  return {
+    screen: 'game',
+    title: '',
+    message: '',
+    instruction: '',
+    isOverlayVisible: false,
+  };
+}
+
+export function isStartOrRestartKey(event) {
+  return (
+    event.code === 'Enter'
+    || event.key === 'Enter'
+    || event.code === 'Space'
+    || event.key === ' '
+  );
 }
 
 export function primaryActionLabel(state) {
@@ -72,6 +111,10 @@ function bootstrap() {
   const highscore = document.querySelector('[data-highscore]');
   const status = document.querySelector('[data-status]');
   const action = document.querySelector('[data-game-action]');
+  const flowOverlay = document.querySelector('[data-flow-overlay]');
+  const flowTitle = document.querySelector('[data-flow-title]');
+  const flowMessage = document.querySelector('[data-flow-message]');
+  const flowInstruction = document.querySelector('[data-flow-instruction]');
 
   if (!canvas || !score || !highscore || !status || !action) {
     return;
@@ -89,6 +132,16 @@ function bootstrap() {
     status.textContent = statusMessage(game.state);
     action.textContent = primaryActionLabel(game.state);
     action.disabled = game.state.status === 'playing';
+
+    const flowScreen = gameFlowScreen(game.state);
+    if (flowOverlay && flowTitle && flowMessage && flowInstruction) {
+      flowOverlay.hidden = !flowScreen.isOverlayVisible;
+      flowOverlay.dataset.screen = flowScreen.screen;
+      flowTitle.textContent = flowScreen.title;
+      flowMessage.textContent = flowScreen.message;
+      flowInstruction.textContent = flowScreen.instruction;
+    }
+
     drawGame(context, game.state);
   }
 
@@ -105,7 +158,7 @@ function bootstrap() {
   action.addEventListener('click', runPrimaryAction);
 
   window.addEventListener('keydown', (event) => {
-    if (event.code === 'Space' || event.key === ' ') {
+    if (isStartOrRestartKey(event)) {
       event.preventDefault();
       runPrimaryAction();
       return;

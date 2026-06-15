@@ -8,6 +8,8 @@ import {
   movesPerSecondForScore,
 } from '../snake-core.js';
 import {
+  gameFlowScreen,
+  isStartOrRestartKey,
   primaryActionLabel,
   statusMessage,
 } from '../app.js';
@@ -357,13 +359,46 @@ describe('snake game core', () => {
   });
 
   it('provides clear status messages and action labels for start, play, and game-over screens', () => {
-    expect(statusMessage({ status: 'ready', score: 0 })).toBe('Press Start or Space to play. Use Arrow Keys or WASD to steer.');
+    expect(statusMessage({ status: 'ready', score: 0 })).toBe('Press Enter or Space to start. Use Arrow Keys or WASD to steer.');
     expect(primaryActionLabel({ status: 'ready' })).toBe('Start Game');
 
     expect(statusMessage({ status: 'playing', score: 2 })).toBe('Playing — use Arrow Keys or WASD');
     expect(primaryActionLabel({ status: 'playing' })).toBe('Playing');
 
-    expect(statusMessage({ status: 'game-over', score: 7 })).toBe('Game Over — Final Score 7. Press Restart or Space to play again.');
+    expect(statusMessage({ status: 'game-over', score: 7 })).toBe('Game Over — Final Score 7. Press Enter or Space to restart.');
     expect(primaryActionLabel({ status: 'game-over' })).toBe('Restart Game');
+  });
+
+  it('describes the visible game-flow screen for ready, playing, and game-over states', () => {
+    expect(gameFlowScreen({ status: 'ready', score: 0 })).toEqual({
+      screen: 'start',
+      title: 'Ready to play?',
+      message: 'Use Arrow Keys or WASD to steer the snake.',
+      instruction: 'Press Enter or Space to start.',
+      isOverlayVisible: true,
+    });
+
+    expect(gameFlowScreen({ status: 'playing', score: 0 })).toEqual({
+      screen: 'game',
+      title: '',
+      message: '',
+      instruction: '',
+      isOverlayVisible: false,
+    });
+
+    expect(gameFlowScreen({ status: 'game-over', score: 7 })).toEqual({
+      screen: 'game-over',
+      title: 'Game Over',
+      message: 'Final Score: 7',
+      instruction: 'Press Enter or Space to restart.',
+      isOverlayVisible: true,
+    });
+  });
+
+  it('recognizes Enter and Space as start or restart keys without requiring sound support', () => {
+    expect(isStartOrRestartKey({ code: 'Enter', key: 'Enter' })).toBe(true);
+    expect(isStartOrRestartKey({ code: 'Space', key: ' ' })).toBe(true);
+    expect(isStartOrRestartKey({ code: '', key: ' ' })).toBe(true);
+    expect(isStartOrRestartKey({ code: 'KeyW', key: 'w' })).toBe(false);
   });
 });
