@@ -87,6 +87,10 @@ function sameCell(a, b) {
   return a.x === b.x && a.y === b.y;
 }
 
+function isSameDirection(a, b) {
+  return a.x === b.x && a.y === b.y;
+}
+
 function isOpposite(a, b) {
   return a.x + b.x === 0 && a.y + b.y === 0;
 }
@@ -205,6 +209,10 @@ export function createGame(options = {}) {
         || hasQueuedTurn
         || isOpposite(nextDirection, state.direction)
       ) {
+        return false;
+      }
+
+      if (isSameDirection(nextDirection, state.direction)) {
         return false;
       }
 
