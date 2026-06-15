@@ -140,6 +140,18 @@ describe('snake game core', () => {
     expect(game.state.status).toBe('playing');
   });
 
+  it('treats pressing the current direction as a no-op without consuming the queued turn', () => {
+    const game = createGame({ random: alwaysFirstFreeCell });
+    game.start();
+
+    expect(game.turn(directions.RIGHT)).toBe(false);
+    expect(game.turn(directions.UP)).toBe(true);
+    game.step();
+
+    expect(game.state.direction).toEqual(directions.UP);
+    expect(game.state.snake[0]).toEqual({ x: 10, y: 9 });
+  });
+
   it('wraps around board edges', () => {
     const game = createGame({
       random: alwaysFirstFreeCell,
@@ -223,6 +235,53 @@ describe('snake game core', () => {
     expect(game.state.snake[0]).toEqual({ x: 11, y: 10 });
     expect(game.state.food).not.toEqual({ x: 11, y: 10 });
     expect(game.state.snake).not.toContainEqual(game.state.food);
+  });
+
+  it('places food only on remaining free cells after growth, even on a nearly full board', () => {
+    const game = createGame({
+      gridSize: 3,
+      random: () => 0.99,
+      initialSnake: [
+        { x: 1, y: 1 },
+        { x: 0, y: 1 },
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 },
+        { x: 2, y: 1 },
+        { x: 2, y: 2 },
+      ],
+      initialFood: { x: 1, y: 2 },
+      initialDirection: directions.DOWN,
+    });
+
+    game.start();
+    game.step();
+
+    expect(game.state.score).toBe(1);
+    expect(game.state.snake).toHaveLength(8);
+    expect(game.state.food).toEqual({ x: 0, y: 2 });
+    expect(game.state.snake).not.toContainEqual(game.state.food);
+  });
+
+  it('uses null food when the snake fills the entire board', () => {
+    const game = createGame({
+      gridSize: 2,
+      random: alwaysFirstFreeCell,
+      initialSnake: [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      initialFood: { x: 0, y: 1 },
+      initialDirection: directions.DOWN,
+    });
+
+    game.start();
+    game.step();
+
+    expect(game.state.score).toBe(1);
+    expect(game.state.snake).toHaveLength(4);
+    expect(game.state.food).toBeNull();
   });
 
   it('ends the game on self-collision', () => {
