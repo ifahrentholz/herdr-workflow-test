@@ -198,16 +198,17 @@ describe('snake game core', () => {
     expect(game.state.snake[0]).toEqual({ x: 0, y: 10 });
   });
 
-  it('calculates gradual speed progression every 5 points up to a capped maximum', () => {
-    expect(movesPerSecondForScore(0)).toBeCloseTo(7);
-    expect(movesPerSecondForScore(4)).toBeCloseTo(7);
-    expect(movesPerSecondForScore(5)).toBeCloseTo(8);
-    expect(movesPerSecondForScore(10)).toBeCloseTo(9);
-    expect(movesPerSecondForScore(35)).toBeCloseTo(14);
-    expect(movesPerSecondForScore(100)).toBeCloseTo(14);
+  it('calculates progressive tick intervals every 5 points down to a capped minimum', () => {
+    expect(moveDelayMsForScore(0)).toBeCloseTo(140);
+    expect(moveDelayMsForScore(4)).toBeCloseTo(140);
+    expect(moveDelayMsForScore(5)).toBeCloseTo(130);
+    expect(moveDelayMsForScore(10)).toBeCloseTo(120);
+    expect(moveDelayMsForScore(30)).toBeCloseTo(80);
+    expect(moveDelayMsForScore(35)).toBeCloseTo(70);
+    expect(moveDelayMsForScore(100)).toBeCloseTo(70);
 
-    expect(moveDelayMsForScore(0)).toBeCloseTo(1000 / 7);
-    expect(moveDelayMsForScore(35)).toBeCloseTo(1000 / 14);
+    expect(movesPerSecondForScore(0)).toBeCloseTo(1000 / 140);
+    expect(movesPerSecondForScore(35)).toBeCloseTo(1000 / 70);
   });
 
   it('exposes current speed in game state and resets it when a new game starts', () => {
@@ -221,8 +222,8 @@ describe('snake game core', () => {
       initialFood: { x: 11, y: 10 },
     });
 
-    expect(game.state.movesPerSecond).toBeCloseTo(7);
-    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 7);
+    expect(game.state.movesPerSecond).toBeCloseTo(1000 / 140);
+    expect(game.state.moveDelayMs).toBeCloseTo(140);
 
     game.start();
     for (let score = 0; score < 5; score += 1) {
@@ -235,15 +236,15 @@ describe('snake game core', () => {
     }
 
     expect(game.state.score).toBe(5);
-    expect(game.state.movesPerSecond).toBeCloseTo(8);
-    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 8);
+    expect(game.state.movesPerSecond).toBeCloseTo(1000 / 130);
+    expect(game.state.moveDelayMs).toBeCloseTo(130);
 
     game.state.status = 'game-over';
     expect(game.restart()).toBe(true);
 
     expect(game.state.score).toBe(0);
-    expect(game.state.movesPerSecond).toBeCloseTo(7);
-    expect(game.state.moveDelayMs).toBeCloseTo(1000 / 7);
+    expect(game.state.movesPerSecond).toBeCloseTo(1000 / 140);
+    expect(game.state.moveDelayMs).toBeCloseTo(140);
   });
 
   it('eats food, grows, increments score, and places the next food on a free cell', () => {
