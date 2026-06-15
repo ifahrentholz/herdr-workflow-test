@@ -20,13 +20,20 @@
         </div>
       </div>
 
-      <canvas data-game-canvas aria-label="20 by 20 Snake game board"></canvas>
+      <div class="game-board-frame">
+        <canvas data-game-canvas aria-label="20 by 20 Snake game board"></canvas>
+        <section class="flow-overlay" data-flow-overlay data-screen="start" aria-live="polite">
+          <h2 data-flow-title>Ready to play?</h2>
+          <p data-flow-message>Use Arrow Keys or WASD to steer the snake.</p>
+          <p data-flow-instruction>Press Enter or Space to start.</p>
+        </section>
+      </div>
 
       <div class="controls">
         <button class="game-action" type="button" data-game-action>Start Game</button>
       </div>
-      <p class="status" data-status>Press Start or Space to play. Use Arrow Keys or WASD to steer.</p>
-      <p class="help">Eat red food, grow longer, wrap around edges, avoid your own tail, and press Space to start or restart.</p>
+      <p class="status" data-status>Press Enter or Space to start. Use Arrow Keys or WASD to steer.</p>
+      <p class="help">Eat red food, grow longer, wrap around edges, avoid your own tail, and press Enter or Space to start or restart.</p>
     </main>
   </body>
 </html>
