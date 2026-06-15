@@ -6,6 +6,8 @@ import {
   directionFromKey,
   moveDelayMsForScore,
   movesPerSecondForScore,
+} from '../snake-core.js';
+import {
   primaryActionLabel,
   statusMessage,
 } from '../app.js';
